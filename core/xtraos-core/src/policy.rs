@@ -41,10 +41,12 @@ pub enum Class {
     CredentialEntry,
     /// Creating, copying, moving, renaming files through file skills (P2-M3).
     FileChange,
+    /// Closing a window the agent did not open (P2-M4, ADR 0028).
+    CloseUserWindow,
 }
 
 impl Class {
-    pub const ALL: [Class; 12] = [
+    pub const ALL: [Class; 13] = [
         Class::Observe,
         Class::Input,
         Class::Launch,
@@ -57,6 +59,7 @@ impl Class {
         Class::Elevated,
         Class::CredentialEntry,
         Class::FileChange,
+        Class::CloseUserWindow,
     ];
 
     pub fn name(self) -> &'static str {
@@ -73,6 +76,7 @@ impl Class {
             Class::Elevated => "elevated",
             Class::CredentialEntry => "credential_entry",
             Class::FileChange => "file_change",
+            Class::CloseUserWindow => "close_user_window",
         }
     }
 
@@ -89,7 +93,8 @@ impl Class {
             | Class::FileSend
             | Class::Delete
             | Class::SystemSettings
-            | Class::Elevated => Decision::Confirm,
+            | Class::Elevated
+            | Class::CloseUserWindow => Decision::Confirm,
             Class::Purchase | Class::CredentialEntry => Decision::Deny,
         }
     }
@@ -118,6 +123,8 @@ pub struct Facts {
     pub own_window: bool,
     /// Class declared by a skill (P2-M3), e.g. `delete` for files.delete.
     pub skill_class: Option<Class>,
+    /// close_window on a window the agent did not open (ADR 0028).
+    pub closes_user_window: bool,
 }
 
 const MESSAGING_PROCESSES: &[&str] = &[
@@ -263,6 +270,7 @@ fn method_class(m: &str) -> Class {
         }
         m if m.starts_with("run_skill:") || m == "app_map" => Class::Observe,
         "launch_app" => Class::Launch,
+        "cleanup" => Class::Close,
         "close_window" => Class::Close,
         _ => Class::Input,
     }
@@ -320,6 +328,9 @@ pub fn classify(f: &Facts) -> Vec<(Class, String)> {
     }
     if f.elevated {
         out.push((Class::Elevated, "administrator (UAC) launch".into()));
+    }
+    if f.closes_user_window {
+        out.push((Class::CloseUserWindow, "a window you opened".into()));
     }
     if let Some(c) = f.skill_class {
         out.push((c, f.method.clone()));

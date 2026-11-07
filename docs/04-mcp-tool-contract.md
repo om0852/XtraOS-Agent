@@ -36,10 +36,11 @@ M3 (ADR 0012): a window is referenced as `w<handle>` (e.g. `w460650`) or the int
 
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
-| `list_windows` | `filter?` (substring of title or process) | `w460650 chrome.exe "Google - Chrome" 0,0 1920x1040 focused` lines | P1 (M3) |
+| `list_windows` | `filter?` (substring of title or process) | `w460650 chrome.exe "Google - Chrome" 0,0 1920x1040 focused` lines; `agent` = opened by the agent (P2-M4) | P1 (M3) |
 | `focus_window` | `window` | ok (else `NEEDS_HUMAN`) | P1 (M3) |
-| `launch_app` | `app` (name/path/AUMID), `args?`, `elevated?`, `timeout_ms?` | ref of the new window | P1 (M3) |
-| `close_window` | `window`, `timeout_ms?` | ok (graceful WM_CLOSE; else `NEEDS_HUMAN`) | P1 (M3) |
+| `launch_app` | `app` (name/path/AUMID or app-map service), `args?`, `elevated?`, `reuse?` (default true: same app+args still open from the agent → that window), `timeout_ms?` | ref of the new (or reused) window | P1 (M3; reuse P2-M4) |
+| `close_window` | `window`, `timeout_ms?` | ok (graceful WM_CLOSE; else `NEEDS_HUMAN`); a window the agent did not open asks the user first (P2-M4) | P1 (M3) |
+| `cleanup` | — | closes every still-open window the agent opened (only those); lists what is left | P2 (M4) |
 | `window_bounds` | `window`, `x?,y?,w?,h?` (visible frame), `state?` (minimize/maximize/restore) | bounds + state | P1 (M3) |
 
 Input, close and bounds on an elevated window return `ELEVATION_REQUIRED` (ADR 0012).

@@ -94,6 +94,12 @@ pub const BUILTINS: &[Builtin] = &[
         about: "to the Recycle Bin (asks the user first)",
         class: Class::Delete,
     },
+    Builtin {
+        name: "whatsapp.send",
+        args: "phone, text?, file?, keep_open?",
+        about: "send a message/file on WhatsApp Web (asks the user first; checks the chat is that number)",
+        class: Class::MessageSend,
+    },
 ];
 
 fn skills_dir() -> PathBuf {
@@ -335,11 +341,31 @@ pub fn plan(p: &Value) -> Result<Plan, ActError> {
                     if ps.len() > 8 { "\n…" } else { "" }
                 )
             }
+            "whatsapp.send" => {
+                let w = wa_args(&args)?;
+                format!(
+                    "send a WhatsApp message to +{}{}{}",
+                    w.phone,
+                    w.text
+                        .as_ref()
+                        .map(|t| format!(":\n\"{}\"", crate::perceive::clip(t, 120)))
+                        .unwrap_or_default(),
+                    w.file
+                        .as_ref()
+                        .map(|f| format!("\nwith the file {}", f.display()))
+                        .unwrap_or_default()
+                )
+            }
             _ => b.name.to_string(),
+        };
+        let class = if b.name == "whatsapp.send" && args.get("file").is_some_and(|f| !f.is_null()) {
+            Class::FileSend
+        } else {
+            b.class
         };
         return Ok(Plan {
             name,
-            class: b.class,
+            class,
             what,
             is_macro: false,
         });
@@ -380,6 +406,7 @@ pub fn run(p: &Value, log: &mut dyn FnMut(crate::exec::StepLog)) -> Result<Value
         "files.copy" | "files.move" => copy_move(&args, pl.name == "files.move"),
         "files.rename" => rename(&args),
         "files.delete" => delete(&args),
+        "whatsapp.send" => whatsapp_send(&args),
         n => Err(bad(format!("unknown skill '{n}'"))),
     }
 }
@@ -668,6 +695,271 @@ fn delete(a: &Value) -> Result<Value, ActError> {
     Ok(json!({"text": format!("ok {} item(s) moved to the Recycle Bin", ps.len())}))
 }
 
+// ---------------------------------------------------------------------------------------------
+// whatsapp.send (P2-M4, ADR 0028)
+
+pub struct WaArgs {
+    pub phone: String,
+    pub text: Option<String>,
+    pub file: Option<PathBuf>,
+    pub keep_open: bool,
+}
+
+/// Digits only, with the country code (8–15 digits).
+pub fn wa_phone(raw: &str) -> Option<String> {
+    let d: String = raw
+        .chars()
+        .filter(|c| !matches!(c, '+' | ' ' | '-' | '(' | ')'))
+        .collect();
+    (d.chars().all(|c| c.is_ascii_digit()) && (8..=15).contains(&d.len())).then_some(d)
+}
+
+/// Percent-encoding for a URL query value (UTF-8).
+pub fn url_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn wa_args(a: &Value) -> Result<WaArgs, ActError> {
+    let phone = wa_phone(str_arg(a, "phone")?)
+        .ok_or_else(|| bad("'phone' needs the country code and 8-15 digits, e.g. 919876543210"))?;
+    let text = a
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+        .map(String::from);
+    if text.as_ref().is_some_and(|t| t.chars().count() > 4000) {
+        return Err(bad("'text' is limited to 4,000 characters"));
+    }
+    let file = match a.get("file").and_then(Value::as_str) {
+        Some(f) => {
+            let p = checked(f)?;
+            if !p.is_file() {
+                return Err(bad(format!("{} is not an existing file", p.display())));
+            }
+            Some(p)
+        }
+        None => None,
+    };
+    if text.is_none() && file.is_none() {
+        return Err(bad("give 'text' and/or 'file'"));
+    }
+    Ok(WaArgs {
+        phone,
+        text,
+        file,
+        keep_open: a.get("keep_open").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+fn call(tool: &str, args: Value) -> Result<Value, ActError> {
+    crate::safety::check()?; // the kill switch stops the skill between steps
+    crate::exec::dispatch(tool, &args)
+}
+
+/// First line of a find result matching `pred`, as (ref, line).
+fn find_line(win: &str, query: &str, pred: impl Fn(&str) -> bool) -> Option<(String, String)> {
+    let r = call("find", json!({"window": win, "query": query})).ok()?;
+    r["text"]
+        .as_str()?
+        .lines()
+        .find(|l| l.starts_with('e') && pred(l))
+        .map(|l| (l.split(' ').next().unwrap_or("").to_string(), l.to_string()))
+}
+
+fn whatsapp_send(a: &Value) -> Result<Value, ActError> {
+    use std::time::{Duration, Instant};
+    let w = wa_args(a)?;
+    let (browser, map_args) = crate::appmap::resolve_launch("whatsapp")
+        .filter(|(_, args)| args.iter().any(|x| x.contains("web.whatsapp.com")))
+        .ok_or_else(|| ActError {
+            code: "ELEMENT_NOT_FOUND",
+            message: "WhatsApp is not in the app map".into(),
+            hint: "app_map set: service whatsapp, surface browser, location {browser: \"firefox\", url: \"https://web.whatsapp.com\"}.",
+        })?;
+    let url = format!(
+        "https://web.whatsapp.com/send?phone={}{}",
+        w.phone,
+        match (&w.text, &w.file) {
+            (Some(t), None) => format!("&text={}", url_encode(t)),
+            _ => String::new(),
+        }
+    );
+    let user_fg = crate::winmgr::foreground_root();
+    // Reuse an open WhatsApp window (only one WhatsApp tab can be active); otherwise open one.
+    let existing = crate::winmgr::listable_windows().into_iter().find(|&h| {
+        crate::winmgr::title(h).to_lowercase().contains("whatsapp")
+            && matches!(
+                crate::winmgr::process_name(crate::winmgr::pid_of(h))
+                    .to_lowercase()
+                    .as_str(),
+                "firefox.exe" | "chrome.exe" | "msedge.exe" | "brave.exe"
+            )
+    });
+    let (win, opened) = match existing {
+        Some(h) => {
+            let r = crate::winmgr::window_ref(h);
+            call("focus_window", json!({"window": r}))?;
+            call("press_keys", json!({"window": r, "keys": ["Ctrl+L"]}))?;
+            call("type", json!({"window": r, "text": url, "submit": true}))?;
+            (r, false)
+        }
+        None => {
+            let mut args = map_args;
+            args.pop(); // the map's start URL → the chat URL
+            args.push(url.clone());
+            let l = call(
+                "launch_app",
+                json!({"app": browser, "args": args, "timeout_ms": 20000, "reuse": false}),
+            )?;
+            (l["ref"].as_str().unwrap_or("").to_string(), true)
+        }
+    };
+    // Close what this skill opened (never the user's WhatsApp window); give the foreground back.
+    // Returns whether the window it opened is really closed.
+    let finish = |opened: bool, win: &str| -> bool {
+        let mut closed = false;
+        if opened && !w.keep_open {
+            closed = crate::winmgr::run("cleanup_one", &json!({"window": win}))
+                .is_ok_and(|r| r["closed"] == 1);
+        }
+        if !user_fg.is_null()
+            && crate::winmgr::exists(user_fg)
+            && crate::winmgr::foreground_root() != user_fg
+        {
+            crate::winmgr::focus(user_fg);
+        }
+        closed
+    };
+    // Wait for the chat's compose box (Firefox exposes the page only while it is in front).
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let compose = loop {
+        let _ = call("focus_window", json!({"window": win}));
+        if let Some((r, _)) = find_line(&win, "use here", |l| l.contains("Button \"Use here\"")) {
+            let _ = call("click", json!({"ref": r}));
+        }
+        if find_line(&win, "shared via url is invalid", |_| true).is_some() {
+            finish(opened, &win);
+            return Err(bad(format!(
+                "WhatsApp says +{} is not a valid WhatsApp number",
+                w.phone
+            )));
+        }
+        if let Some(found) = find_line(&win, "type a message to", |l| l.contains("Edit")) {
+            break found;
+        }
+        if Instant::now() > deadline {
+            finish(opened, &win);
+            return Err(ActError {
+                code: "TIMEOUT",
+                message: "WhatsApp did not open the chat within 45 s".into(),
+                hint: "Check that WhatsApp Web is signed in (QR code is a human step).",
+            });
+        }
+        std::thread::sleep(Duration::from_millis(1000));
+    };
+    // Never send to the wrong chat: the compose label must name this number.
+    let label_digits: String = compose
+        .1
+        .split(" = ")
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect();
+    let tail = &w.phone[w.phone.len().saturating_sub(10)..];
+    if !label_digits.contains(tail) {
+        finish(opened, &win);
+        return Err(ActError {
+            code: "NEEDS_HUMAN",
+            message: "WhatsApp opened a chat that does not show this number; nothing was sent"
+                .into(),
+            hint: "The contact may be saved under a name only: ask the user.",
+        });
+    }
+    let mut what = String::new();
+    if let Some(f) = &w.file {
+        let previous = crate::input::clipboard_set_files(std::slice::from_ref(f))?;
+        let pasted = call("press_keys", json!({"window": win, "keys": ["Ctrl+V"]}));
+        crate::input::clipboard_restore(previous);
+        pasted?;
+        let name = name_of(f);
+        let t0 = Instant::now();
+        while find_line(&win, "selected", |l| l.contains("Button \"Send")).is_none() {
+            if t0.elapsed() > Duration::from_secs(15) {
+                finish(opened, &win);
+                return Err(internal("WhatsApp did not show the file preview"));
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        if let Some(t) = &w.text {
+            call("type", json!({"window": win, "text": t}))?; // caption
+        }
+        call("press_keys", json!({"window": win, "keys": ["Enter"]}))?;
+        what = format!("file {name}");
+        let t0 = Instant::now();
+        while find_line(&win, "selected", |l| l.contains("Button \"Send")).is_some() {
+            if t0.elapsed() > Duration::from_secs(20) {
+                finish(opened, &win);
+                return Err(internal(
+                    "the file preview did not close: not confirmed as sent",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    } else if let Some(t) = &w.text {
+        // The URL put the text in the compose box; check, then send.
+        if !compose
+            .1
+            .contains(&crate::perceive::clip(t, 60).replace('…', ""))
+        {
+            call(
+                "press_keys",
+                json!({"window": win, "keys": ["Ctrl+A", "Delete"]}),
+            )?;
+            call("type", json!({"window": win, "text": t}))?;
+        }
+        call("press_keys", json!({"window": win, "keys": ["Enter"]}))?;
+        what = format!("text ({} chars)", t.chars().count());
+        let t0 = Instant::now();
+        loop {
+            let c = find_line(&win, "type a message to", |l| l.contains("Edit"));
+            if c.as_ref()
+                .is_some_and(|(_, l)| !l.contains(" = \"") || l.contains(" = \"\""))
+            {
+                break;
+            }
+            if t0.elapsed() > Duration::from_secs(15) {
+                finish(opened, &win);
+                return Err(internal(
+                    "the message is still in the compose box: not confirmed as sent",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+    std::thread::sleep(Duration::from_millis(800));
+    let closed = finish(opened, &win);
+    let note = match (opened, w.keep_open, closed) {
+        (false, _, _) => " (your WhatsApp window was reused and left open)".to_string(),
+        (true, true, _) => format!(" (window {win} kept open)"),
+        (true, false, true) => " (the window it opened is closed)".to_string(),
+        (true, false, false) => format!(" (window {win} could not be closed: run cleanup)"),
+    };
+    Ok(json!({
+        "text": format!("ok sent {what} to +{} on WhatsApp{note}", w.phone),
+        "window_reused": !opened,
+        "window_closed": closed,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,6 +1014,38 @@ mod tests {
         assert_eq!(
             expand(&def, &json!({"x": 1, "y": 2})).unwrap_err().code,
             "INVALID_ARGS"
+        );
+    }
+
+    #[test]
+    fn whatsapp_args() {
+        assert_eq!(wa_phone("+91 98765-43210").as_deref(), Some("919876543210"));
+        assert!(wa_phone("12345").is_none());
+        assert!(wa_phone("91abc").is_none());
+        assert_eq!(
+            url_encode("Hi, नमस्ते!"),
+            "Hi%2C%20%E0%A4%A8%E0%A4%AE%E0%A4%B8%E0%A5%8D%E0%A4%A4%E0%A5%87%21"
+        );
+        assert_eq!(
+            wa_args(&json!({"phone": "919876543210"}))
+                .err()
+                .unwrap()
+                .code,
+            "INVALID_ARGS"
+        );
+        assert_eq!(
+            wa_args(&json!({"phone": "1", "text": "x"}))
+                .err()
+                .unwrap()
+                .code,
+            "INVALID_ARGS"
+        );
+        let p = plan(&json!({"name": "whatsapp.send", "args": {"phone": "+91 98765 43210", "text": "Hello"}})).unwrap();
+        assert_eq!(p.class, Class::MessageSend);
+        assert!(
+            p.what.contains("+919876543210") && p.what.contains("Hello"),
+            "{}",
+            p.what
         );
     }
 

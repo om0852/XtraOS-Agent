@@ -31,11 +31,11 @@ const WINDOW = {
 };
 const WINDOW_REQ = { type: ['string', 'integer'], description: 'Window ref from list_windows (e.g. "w460650") or its integer handle' };
 
-type Win = { ref: string; process: string; title: string; x: number; y: number; w: number; h: number; state: string; focused: boolean; elevated: boolean };
+type Win = { ref: string; process: string; title: string; x: number; y: number; w: number; h: number; state: string; focused: boolean; elevated: boolean; agent?: boolean; reused?: boolean };
 /** One compact line per window (docs/06 token budget). */
 const winLine = (w: Win) =>
   `${w.ref} ${w.process} "${w.title.length > 80 ? w.title.slice(0, 79) + '…' : w.title}" ${w.x},${w.y} ${w.w}x${w.h}` +
-  `${w.state !== 'normal' ? ' ' + w.state : ''}${w.focused ? ' focused' : ''}${w.elevated ? ' elevated' : ''}`;
+  `${w.state !== 'normal' ? ' ' + w.state : ''}${w.focused ? ' focused' : ''}${w.elevated ? ' elevated' : ''}${w.agent ? ' agent' : ''}`;
 const X = int('Screen X in physical pixels');
 const Y = int('Screen Y in physical pixels');
 const BUTTON = { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button (default left)' };
@@ -434,7 +434,8 @@ export const TOOLS: ToolDef[] = [
     name: 'run_skill',
     description:
       'Runs a skill by name with its args (see list_skills), e.g. {name: "files.copy", args: {from: ["C:\\\\Users\\\\me\\\\a.pdf"], ' +
-      'to_dir: "C:\\\\Users\\\\me\\\\Desktop\\\\Reports"}}. Every action inside still passes the safety policy.',
+      'to_dir: "C:\\\\Users\\\\me\\\\Desktop\\\\Reports"}}. Also whatsapp.send {phone: "+91…", text?, file?}. ' +
+      'Every action inside still passes the safety policy; sending asks the user once, showing the number and message.',
     inputSchema: {
       type: 'object',
       properties: { name: { type: 'string', minLength: 1 }, args: { type: 'object' } },
@@ -451,7 +452,8 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'list_windows',
     description:
-      'Lists open top-level windows, front first: ref, process, title, position, size, state, focused, elevated. ' +
+      'Lists open top-level windows, front first: ref, process, title, position, size, state, focused, elevated, ' +
+      '`agent` = opened by the agent (only those may be closed without asking; see cleanup). ' +
       'Use the ref (e.g. "w460650") as `window` in other tools. Optional filter matches title or process.',
     inputSchema: {
       type: 'object',
@@ -473,6 +475,8 @@ export const TOOLS: ToolDef[] = [
     name: 'launch_app',
     description:
       'Starts an app and returns its NEW window ref. app = name ("notepad", "chrome", "firefox"), full path, or AUMID. ' +
+      'If the agent already opened the same app + args and that window is still open, it is reused (focused, `reused`) ' +
+      'instead of opening a duplicate; reuse=false forces a new window. ' +
       'elevated=true asks the user via the Windows admin (UAC) prompt; admin windows cannot be controlled (ELEVATION_REQUIRED).',
     inputSchema: {
       type: 'object',
@@ -480,16 +484,19 @@ export const TOOLS: ToolDef[] = [
         app: { type: 'string' },
         args: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Command-line arguments' },
         elevated: { type: 'boolean' },
+        reuse: { type: 'boolean', description: 'Reuse a still-open window the agent opened the same way (default true)' },
         timeout_ms: { type: 'integer', minimum: 0, maximum: 60000, description: 'Wait for the window (default 15000)' },
       },
       required: ['app'],
       additionalProperties: false,
     },
-    run: forward('launch_app', (r) => `ok launched ${winLine(r as Win)}`),
+    run: forward('launch_app', (r) => `ok ${r.reused ? 'reused' : 'launched'} ${winLine(r as Win)}`),
   },
   {
     name: 'close_window',
-    description: 'Asks a window to close (like clicking X; the app may ask to save → NEEDS_HUMAN). Never force-kills.',
+    description:
+      'Asks a window to close (like clicking X; the app may ask to save → NEEDS_HUMAN). Never force-kills. ' +
+      'Closing a window the agent did not open asks the user first (close_user_window).',
     inputSchema: {
       type: 'object',
       properties: { window: WINDOW_REQ, timeout_ms: { type: 'integer', minimum: 0, maximum: 60000 } },
@@ -497,6 +504,14 @@ export const TOOLS: ToolDef[] = [
       additionalProperties: false,
     },
     run: forward('close_window', (r) => `ok closed ${r.ref}`),
+  },
+  {
+    name: 'cleanup',
+    description:
+      'Closes every still-open window the agent opened in this session (only those, never windows the user opened), e.g. ' +
+      'when a task is done. Confirms a browser "Leave page" prompt only in those windows. Reports what it closed and what is left.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    run: forward('cleanup', (r) => r.text),
   },
   {
     name: 'window_bounds',

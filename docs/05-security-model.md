@@ -35,6 +35,10 @@ Protected paths (file skills, ADR 0026): Windows folder, Program Files, ProgramD
 users' profiles, UNC paths, drive roots, XtraOS install + data folders → `BLOCKED_BY_POLICY`.
 Deletes go to the Recycle Bin and always ask first.
 
+Resource discipline (ADR 0028): the core tracks the windows it opens, reuses them instead of
+opening duplicates, `cleanup` closes only those, and closing a window the user opened asks
+the user first (`close_user_window`).
+
 ## Hard boundaries (not configurable)
 
 No CAPTCHA solving, no bot-detection evasion, no secure-desktop/UAC/lock-screen automation,

@@ -173,6 +173,18 @@ Each milestone adds its cases here before implementation (CLAUDE.md §3).
 | P2-SK-06 | Routine file task (copy a report into a new folder and open it) | 1 call |
 | P2-POL-01 | `policy.json` changed → core dialog; Deny → old rules stay; Allow → new rules | as stated, logged |
 
+### P2-M4 Messaging + resource discipline (ADR 0028)
+| ID | Test case | Expected |
+|---|---|---|
+| P2-RES-01 | `launch_app` same app twice | second call reuses the first window; one window |
+| P2-RES-02 | `list_windows` marks agent-opened windows | `agent` only on those |
+| P2-RES-03 | `cleanup` | closes only agent-opened windows; a user window stays |
+| P2-RES-04 | `close_window` on a window the agent did not open | confirm dialog; Deny → still open |
+| P2-WA-01 | `whatsapp.send(own number, text)` | dialog shows number + text; Allow → message in the chat; agent window closed |
+| P2-WA-02 | `whatsapp.send(own number, file, caption)` | file appears in the chat; clipboard text restored |
+| P2-WA-03 | Deny in the dialog | nothing sent, nothing typed |
+| P2-WA-04 | Bad number / no app-map entry | `INVALID_ARGS` / `ELEMENT_NOT_FOUND` before any window opens |
+
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).
 2. Fix → add/extend a test that would have caught it → re-run the full gate.

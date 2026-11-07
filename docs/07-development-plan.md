@@ -66,7 +66,9 @@ an owner-chosen test chat) · P2-M5 elevated helper (F5) · P2-M6 browser bridge
 **P2-M2 OCR: closed** (ADRs 0024, 0025) — gate 14/14; opaque window read in ~54 tokens, 33 ms.
 **P2-M3 app map + skills: closed** (ADRs 0026, 0027) — routine file task in one call; policy edits need
 the user's OK; input hooks ignore jitter and the core's own input.
-**Current: P2-M4 messaging skills (needs an owner-chosen test chat).**
+**P2-M4 messaging + resource discipline: built** (ADRs 0028, 0029). `whatsapp.send` (text and
+file, with the user's OK) sends to the owner's own chat. The agent tracks, reuses and cleans up
+only the windows it opened; closing a user window asks. Closes after the hands-off interactive gate.
 
 ## Phase 3 — Reach
 

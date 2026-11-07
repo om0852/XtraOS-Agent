@@ -304,6 +304,46 @@ pub fn root_at(p: crate::input::POINT) -> HWND {
     crate::input::root_at(p)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Resource discipline (ADR 0028): which windows did the agent open?
+
+static AGENT_WINDOWS: std::sync::Mutex<Vec<(usize, String)>> = std::sync::Mutex::new(Vec::new());
+
+fn agent_windows() -> std::sync::MutexGuard<'static, Vec<(usize, String)>> {
+    AGENT_WINDOWS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Remember a window the agent opened, with the launch key (app + args) used for reuse.
+pub fn mark_opened(h: HWND, key: &str) {
+    let mut g = agent_windows();
+    g.retain(|(w, _)| *w != h as usize && unsafe { IsWindow(*w as HWND) } != 0);
+    g.push((h as usize, key.to_string()));
+}
+
+pub fn opened_by_agent(h: HWND) -> bool {
+    agent_windows().iter().any(|(w, _)| *w == h as usize)
+}
+
+fn forget(h: HWND) {
+    agent_windows().retain(|(w, _)| *w != h as usize);
+}
+
+/// A still-open, visible window the agent opened with this key.
+fn reusable(key: &str) -> Option<HWND> {
+    let mut g = agent_windows();
+    g.retain(|(w, _)| unsafe { IsWindow(*w as HWND) } != 0);
+    g.iter()
+        .find(|(w, k)| k == key && unsafe { IsWindowVisible(*w as HWND) } != 0)
+        .map(|(w, _)| *w as HWND)
+}
+
+/// Agent-opened windows that are still open.
+pub fn agent_open_windows() -> Vec<HWND> {
+    let mut g = agent_windows();
+    g.retain(|(w, _)| unsafe { IsWindow(*w as HWND) } != 0);
+    g.iter().map(|(w, _)| *w as HWND).collect()
+}
+
 pub fn exists(h: HWND) -> bool {
     !h.is_null() && unsafe { IsWindow(h) } != 0
 }
@@ -425,6 +465,7 @@ fn describe(h: HWND, fg: HWND) -> Value {
         "state": state(h),
         "focused": h == fg,
         "elevated": is_elevated(h),
+        "agent": opened_by_agent(h),
     })
 }
 
@@ -441,6 +482,7 @@ pub fn foreground_root() -> HWND {
 // Actions
 
 pub const METHODS: &[&str] = &[
+    "cleanup",
     "list_windows",
     "focus_window",
     "launch_app",
@@ -454,6 +496,8 @@ pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
     crate::safety::check()?;
     match method {
         "list_windows" => list_windows(p),
+        "cleanup" => cleanup(None),
+        "cleanup_one" => cleanup(Some(window_param(p)?)),
         "focus_window" => focus_window(p),
         "launch_app" => launch_app(p),
         "close_window" => close_window(p),
@@ -600,6 +644,16 @@ fn launch_app(p: &Value) -> Result<Value, ActError> {
     let app = app.as_str();
     let elevated = p.get("elevated").and_then(Value::as_bool).unwrap_or(false);
     let timeout = opt_u64(p, "timeout_ms", 15_000, 60_000)?;
+    // Reuse instead of opening the same thing twice (ADR 0028).
+    let key = format!("{}|{}|{}", app.to_lowercase(), args, elevated);
+    if p.get("reuse").and_then(Value::as_bool).unwrap_or(true) {
+        if let Some(h) = reusable(&key) {
+            focus(h);
+            let mut d = describe(h, foreground_root());
+            d["reused"] = json!(true);
+            return Ok(d);
+        }
+    }
 
     let before: HashSet<usize> = listable_windows().into_iter().map(|h| h as usize).collect();
     let file = wide(&normalise_app(app));
@@ -665,6 +719,7 @@ fn launch_app(p: &Value) -> Result<Value, ActError> {
             .find(|&&h| pid != 0 && pid_of(h) == pid)
             .or_else(|| new.first())
         {
+            mark_opened(h, &key);
             let mut d = describe(h, foreground_root());
             d["launched_pid"] = json!(pid);
             return Ok(d);
@@ -719,6 +774,7 @@ fn close_window(p: &Value) -> Result<Value, ActError> {
     let deadline = Instant::now() + Duration::from_millis(timeout);
     while Instant::now() < deadline {
         if unsafe { IsWindow(h) } == 0 || unsafe { IsWindowVisible(h) } == 0 {
+            forget(h);
             return Ok(json!({"ref": window_ref(h), "closed": true}));
         }
         sleep(Duration::from_millis(50));
@@ -728,6 +784,88 @@ fn close_window(p: &Value) -> Result<Value, ActError> {
         format!("{} is still open after {timeout} ms", window_ref(h)),
         "The app may be asking to save. Ask the user; XtraOS never force-closes apps.",
     ))
+}
+
+/// Closes every still-open window the agent opened — only those (ADR 0028). A browser's
+/// "Leave page" prompt is confirmed only inside those windows.
+fn cleanup(only: Option<HWND>) -> Result<Value, ActError> {
+    let mut closed = Vec::new();
+    let mut left = Vec::new();
+    for h in agent_open_windows()
+        .into_iter()
+        .filter(|&h| only.is_none_or(|o| o == h))
+    {
+        let r = window_ref(h);
+        let title = title(h);
+        if is_elevated(h) {
+            left.push(format!(
+                "{r} \"{title}\" (administrator window: close it yourself)"
+            ));
+            continue;
+        }
+        let mut done = close_window(&json!({"window": r, "timeout_ms": 3000})).is_ok();
+        // A browser may ask "Leave page?" (late, e.g. while a sent message still syncs). Look for
+        // it for a few seconds; the browser exposes the page only while the window is in front,
+        // and this window is the agent's own.
+        let t0 = Instant::now();
+        while !done && t0.elapsed() < Duration::from_secs(8) {
+            if !exists(h) || unsafe { IsWindowVisible(h) } == 0 {
+                done = true;
+                forget(h);
+                break;
+            }
+            if foreground_root() != h {
+                focus(h);
+                sleep(Duration::from_millis(300));
+            }
+            let btn = crate::perceive::run("find", &json!({"window": r, "query": "leave page"}))
+                .ok()
+                .and_then(|f| {
+                    f["text"]
+                        .as_str()?
+                        .lines()
+                        .find(|l| l.contains("Button \"Leave page\""))
+                        .and_then(|l| l.split(' ').next())
+                        .map(String::from)
+                });
+            if let Some(b) = btn {
+                let _ = crate::input::run("click", &json!({"ref": b}));
+                for _ in 0..60 {
+                    if !exists(h) || unsafe { IsWindowVisible(h) } == 0 {
+                        done = true;
+                        forget(h);
+                        break;
+                    }
+                    sleep(Duration::from_millis(50));
+                }
+            } else {
+                sleep(Duration::from_millis(500));
+            }
+        }
+        if done {
+            closed.push(format!("{r} \"{title}\""));
+        } else {
+            left.push(format!(
+                "{r} \"{title}\" (asks something: left for the user)"
+            ));
+        }
+    }
+    let text = format!(
+        "closed {}: {}\nleft open {}: {}",
+        closed.len(),
+        if closed.is_empty() {
+            "-".to_string()
+        } else {
+            closed.join(", ")
+        },
+        left.len(),
+        if left.is_empty() {
+            "-".to_string()
+        } else {
+            left.join(", ")
+        }
+    );
+    Ok(json!({"text": text, "closed": closed.len(), "left": left.len()}))
 }
 
 fn window_bounds(p: &Value) -> Result<Value, ActError> {

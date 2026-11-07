@@ -1338,6 +1338,64 @@ fn clipboard(p: &Value) -> Result<Value, ActError> {
     }
 }
 
+/// Puts files on the clipboard (CF_HDROP, as Explorer's "Copy" does) so an app can paste them
+/// (whatsapp.send, ADR 0028). Returns the previous clipboard text so the caller can restore it.
+pub fn clipboard_set_files(paths: &[std::path::PathBuf]) -> Result<Option<String>, ActError> {
+    const CF_HDROP: u32 = 15;
+    let previous = clipboard(&json!({"op": "get"}))
+        .ok()
+        .and_then(|v| v["text"].as_str().map(String::from));
+    // DROPFILES header (20 bytes) + double-NUL-terminated list of wide paths.
+    let mut list: Vec<u16> = Vec::new();
+    for p in paths {
+        list.extend(p.as_os_str().to_string_lossy().encode_utf16());
+        list.push(0);
+    }
+    list.push(0);
+    let header: [u32; 5] = [20, 0, 0, 0, 1]; // pFiles=20, pt=(0,0), fNC=0, fWide=1
+    open_clipboard()?;
+    struct Close;
+    impl Drop for Close {
+        fn drop(&mut self) {
+            unsafe { CloseClipboard() };
+        }
+    }
+    let _close = Close;
+    unsafe {
+        let bytes = 20 + list.len() * 2;
+        let h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if h.is_null() {
+            return Err(err("INTERNAL", "GlobalAlloc failed", ""));
+        }
+        let dst = GlobalLock(h) as *mut u8;
+        std::ptr::copy_nonoverlapping(header.as_ptr() as *const u8, dst, 20);
+        std::ptr::copy_nonoverlapping(list.as_ptr() as *const u8, dst.add(20), list.len() * 2);
+        GlobalUnlock(h);
+        EmptyClipboard();
+        if SetClipboardData(CF_HDROP, h).is_null() {
+            GlobalFree(h);
+            return Err(err("INTERNAL", "SetClipboardData(CF_HDROP) failed", ""));
+        }
+    }
+    Ok(previous)
+}
+
+/// Puts text back on the clipboard (restore after clipboard_set_files).
+pub fn clipboard_restore(previous: Option<String>) {
+    let _ = match previous {
+        Some(t) => clipboard(&json!({"op": "set", "text": t})),
+        None => {
+            if open_clipboard().is_ok() {
+                unsafe {
+                    EmptyClipboard();
+                    CloseClipboard();
+                }
+            }
+            Ok(json!({}))
+        }
+    };
+}
+
 fn open_clipboard() -> Result<(), ActError> {
     for _ in 0..20 {
         if unsafe { OpenClipboard(std::ptr::null_mut()) } != 0 {

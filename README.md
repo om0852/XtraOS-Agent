@@ -6,8 +6,8 @@ The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 
 > Status: **Phase 1 complete — Release 0.1 (unsigned developer preview)**, M1–M6 closed
 > (ADRs 0009–0020); **Phase 2: P2-M1 closed** (wait_for, batch, scoped observe; ADR 0023),
-> **P2-M2 closed** (OCR; ADR 0025), **P2-M3 closed** (app map, skills; ADR 0027), next P2-M4 messaging. Open: code signing and a fresh-machine test with Smart App Control on.
-> Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1`, `tests/phase2/p2m1-gate.ps1` … `p2m3-gate.ps1`
+> **P2-M2 closed** (OCR; ADR 0025), **P2-M3 closed** (app map, skills; ADR 0027), **P2-M4 built** (WhatsApp skill, resource discipline; ADR 0029; full hands-off gate pending). Open: code signing and a fresh-machine test with Smart App Control on.
+> Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1`, `tests/phase2/p2m1-gate.ps1` … `p2m4-gate.ps1`
 > (`-Interactive` moves the mouse and types; keep hands off).
 
 ## Install (Release 0.1)
@@ -69,6 +69,8 @@ Recorded flows: [docs/flows](docs/flows/README.md) · Bench: [docs/bench/release
 | App map: installed apps with launch ids; remembered services (DPAPI-encrypted); `launch_app("service")` | verified — P2-M3 gate (ADR 0027) |
 | Skills: file skills (copy/move/rename/mkdir/list/open; delete → Recycle Bin after your OK; system + XtraOS folders protected) and JSON macro skills (policy per step) — routine file task in one call | verified — P2-M3 gate ([S1](docs/flows/S1.md)) |
 | Policy-file changes apply only after you approve them; activity detection ignores the agent's own input and mouse jitter | verified — P2-M3 gate |
+| `whatsapp.send` skill: text or file to a number, after your OK. It checks the chat is that number, restores your clipboard and closes what it opened | verified: P2-M4 e2e, real sends to the owner's own chat (ADR 0029) |
+| Resource discipline: the agent marks the windows it opened, reuses them instead of opening duplicates, and `cleanup` closes only those; closing your windows asks first | verified: P2-M4 e2e (ADR 0029) |
 | Code-signed binaries (Smart App Control on) | not yet (owner decision, ADR 0019) |
 | Fast observe on windows with hundreds of list items | not yet (Phase 2; 222 ms measured vs 120 ms budget) |
 | OCR | verified — P2-M2 (see above) |

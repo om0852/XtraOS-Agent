@@ -493,6 +493,11 @@ fn gather(method: &str, p: &Value) -> (Facts, String) {
         }
         _ => {}
     }
+    if method == "close_window" {
+        if let Some(h) = p.get("window").and_then(|v| winmgr::resolve_window(v).ok()) {
+            f.closes_user_window = !winmgr::opened_by_agent(h);
+        }
+    }
     hwnds.sort_unstable();
     hwnds.dedup();
     f.own_window = hwnds.iter().any(|&h| is_own_window(h));
@@ -575,6 +580,9 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
         Decision::Deny => return Err(blocked(format!("{what}: {reason}"))),
         Decision::Confirm => {
             activity(&format!("waiting for your approval: {what}"));
+            // The dialog takes the foreground; give it back afterwards so the approved action
+            // (e.g. Enter in a chat) reaches the window the user was looking at.
+            let before = winmgr::foreground_root();
             let answer = prompt(
                 "XtraOS Agent — approval needed",
                 &format!(
@@ -584,6 +592,10 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
                 1,
                 Duration::from_secs(60),
             )?;
+            if !before.is_null() && winmgr::exists(before) && !is_own_window(before) {
+                winmgr::focus(before);
+                std::thread::sleep(Duration::from_millis(150));
+            }
             match answer {
                 Some(0) => "confirmed",
                 Some(_) => return Err(blocked(format!("{what}: denied by the user"))),

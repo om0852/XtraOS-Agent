@@ -13,6 +13,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("--elevated-helper") {
         std::process::exit(xtraos_core::helper::helper_main(&args));
     }
+    // `--sandbox-agent <exchange>`: the XtraOS inside Windows Sandbox (ADR 0040).
+    if args.first().map(String::as_str) == Some("--sandbox-agent") {
+        std::process::exit(xtraos_core::sandbox::agent_main(&args));
+    }
     // `call <tool> [params]`: command-line bridge for any LLM / agent (ADR 0039).
     if args.first().map(String::as_str) == Some("call") {
         std::process::exit(xtraos_core::cli::call_main(&args));

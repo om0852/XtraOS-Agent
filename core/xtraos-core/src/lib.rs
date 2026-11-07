@@ -23,6 +23,7 @@ pub mod policy;
 pub mod protocol;
 pub mod recorder;
 pub mod safety;
+pub mod sandbox;
 pub mod skills;
 pub mod sysaudio;
 pub mod sysctl;

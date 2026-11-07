@@ -423,7 +423,8 @@ fn method_class(m: &str) -> Class {
             || m == "elevated_helper"
             || m == "record_session"
             || m == "volume:get"
-            || m == "system:read" =>
+            || m == "system:read"
+            || m == "sandbox:observe" =>
         {
             Class::Observe
         }
@@ -434,7 +435,8 @@ fn method_class(m: &str) -> Class {
                 Class::Input
             }
         }
-        "launch_app" => Class::Launch,
+        "launch_app" | "sandbox:launch" => Class::Launch,
+        "sandbox:close" => Class::Close,
         "cleanup" => Class::Close,
         "close_window" => Class::Close,
         _ => Class::Input,

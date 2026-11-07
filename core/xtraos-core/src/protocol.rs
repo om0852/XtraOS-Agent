@@ -241,6 +241,7 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                     | "pen"
                     | "volume"
                     | "system"
+                    | "sandbox"
             ) =>
         {
             let params = if params.is_null() { json!({}) } else { params };

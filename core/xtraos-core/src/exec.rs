@@ -24,6 +24,9 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, ActError> {
     if method == "record_session" {
         return crate::recorder::run(p);
     }
+    if method == "sandbox" {
+        return crate::sandbox::run(p);
+    }
     if crate::helper::owns_refs(p) {
         return crate::helper::forward(method, p);
     }

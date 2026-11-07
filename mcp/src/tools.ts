@@ -515,6 +515,27 @@ export const TOOLS: ToolDef[] = [
     run: forward('close_window', (r) => `ok closed ${r.ref}`),
   },
   {
+    name: 'sandbox',
+    description:
+      'A separate, disposable Windows desktop (Windows Sandbox) where the agent works with its OWN cursor and keyboard, ' +
+      'in parallel with the user. op=start (network: false by default; returns NEEDS_HUMAN if the user has not enabled ' +
+      'Windows Sandbox), call {tool, args} runs any XtraOS tool inside it (results carry via: "sandbox"), stop discards ' +
+      'everything, status. Nothing from the user’s profile is inside; move files via the shared exchange folder.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['status', 'start', 'call', 'stop'] },
+        network: { type: 'boolean' },
+        tool: { type: 'string' },
+        args: { type: 'object' },
+        timeout_ms: { type: 'integer', minimum: 1000, maximum: 600000 },
+      },
+      required: ['op'],
+      additionalProperties: false,
+    },
+    run: forward('sandbox', (r) => (typeof r.text === 'string' ? r.text : JSON.stringify(r).slice(0, 4000))),
+  },
+  {
     name: 'system',
     description:
       'Common PC controls through the OS, in the background: battery (read), brightness (read; value 0-100 sets the ' +

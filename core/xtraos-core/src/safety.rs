@@ -629,6 +629,14 @@ pub fn gather_targets(method: &str, p: &Value) -> (Facts, String, Vec<HWND>) {
                 o => format!("read {o}"),
             };
         }
+        "sandbox" => {
+            let op = p["op"].as_str().unwrap_or("status");
+            f.method = format!("sandbox:{}", crate::sandbox::op_class(p));
+            what = match op {
+                "call" => format!("in the sandbox: {}", p["tool"].as_str().unwrap_or("?")),
+                o => format!("sandbox {o}"),
+            };
+        }
         "volume" => {
             let op = p["op"].as_str().unwrap_or("get");
             f.method = format!("volume:{op}");

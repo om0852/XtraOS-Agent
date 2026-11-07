@@ -54,6 +54,15 @@ user's input. Password targets are never recorded; typed text becomes an editabl
 Touch / pen (ADR 0036): the same polite rules as the mouse. Multi-finger Windows gestures ask
 first.
 
+Sandbox desktop (ADR 0040): the agent can work in a disposable Windows Sandbox.
+- **What is shared:** the XtraOS program folder (read-only), one exchange folder and a
+  session token (read-only). Network is off by default; no clipboard, printer, microphone
+  or camera is passed through.
+- **The inner XtraOS** refuses to run outside a Sandbox, and has its own policy and kill
+  switch.
+- **Replies from inside** are treated as untrusted data (size-limited JSON).
+- **Enabling Windows Sandbox** is the user's step.
+
 System controls and CLI (ADR 0039): `system` / `volume` use OS APIs only. Switching radios,
 lock and sleep ask first. Shutdown/restart, security, account, network and registry changes are
 not offered at all. The `xtraos-core call` command-line bridge pairs with the user-only token,

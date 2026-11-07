@@ -1,6 +1,6 @@
 # 07 — Development Plan
 
-**Current phase: Phase 1 — Foundation (Windows).** Phase 0 closed by ADR 0007 (gate 10 PASS /
+**Current phase: Phase 3 — Reach** (Phases 0–2 built; see the status lines under each phase). Phase 0 closed by ADR 0007 (gate 10 PASS /
 0 FAIL / 1 SKIP). Toolchain installed and pinned (ADR 0008).
 **M1 Core + IPC: closed** (ADR 0009) — gate 6/6 PASS twice from a clean build
 (`tests/phase1/m1-gate.ps1`). Smart App Control turned off by the owner on this dev machine.
@@ -89,7 +89,8 @@ needs an XtraDevPilot build that includes the bridge security fix.
 **P2-M8 rules editor + XtraOS windows off limits; P3-M1 `frame_diff`; P3-M2 `record_session`;
 P3-M3 `touch`/`pen`: built** (ADRs 0036, 0037). The automated Phase 3 gate passes 14/14. The
 real touch/pen tests run in the hands-off session.
-Open: P3-M4 Agent Workspace / Windows Sandbox (needs a Windows feature enabled, owner);
+**P3-M4 sandbox desktop: built** (ADR 0040). The agent works in Windows Sandbox with its own cursor; the live test needs the owner to enable Windows Sandbox. Microsoft's Agent Workspace stays out until it has a public API.
+Open:
 P3-M5 macOS (needs a Mac).
 
 Game/canvas helpers (frame diff, detector hooks), touch & pen injection (`InjectSyntheticPointerInput`),

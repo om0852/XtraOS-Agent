@@ -237,6 +237,16 @@ A fake bridge in the test process runs every row except LIVE, so no browser and 
 | LG-02 (unit) | deleted line, reordered lines, removed older file, legacy unchained lines | each break found; legacy counted, not an error |
 | TL-01 | `max_actions_per_task: 5`: 6th action; Stop; another action; Resume from the tray; limit again; Continue | asks; refused; refused without a new dialog; fresh allowance; asks; continues |
 
+### P3-M4 Sandbox desktop (ADR 0040)
+| ID | Test case | Expected |
+|---|---|---|
+| P3-SB-01 | inner agent started outside a Sandbox without test mode | refuses (exit 3) |
+| P3-SB-02 | `sandbox call list_windows` (inner agent in test mode) | result `via: "sandbox"` |
+| P3-SB-03 | `call click` in test mode; `call sandbox` | `BLOCKED_BY_POLICY`; `INVALID_ARGS` |
+| P3-SB-04 | session token changed | `BLOCKED_BY_POLICY` (wrong token) |
+| P3-SB-05 | `stop`; then `call`; `start` without the feature | agent ends; `NEEDS_HUMAN`; `NEEDS_HUMAN` with steps |
+| P3-SB-LIVE | (human, Sandbox enabled) start → Notepad + type inside → read back → screenshot → stop | text read back; the user's cursor untouched |
+
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).
 2. Fix → add/extend a test that would have caught it → re-run the full gate.

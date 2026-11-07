@@ -35,6 +35,13 @@ Protected paths (file skills, ADR 0026): Windows folder, Program Files, ProgramD
 users' profiles, UNC paths, drive roots, XtraOS install + data folders → `BLOCKED_BY_POLICY`.
 Deletes go to the Recycle Bin and always ask first.
 
+Browser bridge (ADR 0032): the core is the only XtraOS client of the XtraDevPilot bridge.
+- **Connection:** loopback only, `Sec-WebSocket-Accept` checked, the pairing token sent in
+  an AUTH message (never in a URL). A bridge without a token is not used.
+- **Allowlist:** read actions, click, type, keys, scroll, navigation (http/https only).
+  Never script execution, cookies, storage, network mocks or file upload.
+- **Policy:** the target tab's host and title feed the same rules as desktop windows.
+
 Elevated admin helper (ADR 0030): opt-in per session, started only through a UAC prompt
 (nothing elevated is installed). One pipe connection, only from the core that started it
 (PID-checked both ways, squatting refused, same binary). The helper asks the user in its own

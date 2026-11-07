@@ -198,6 +198,17 @@ Automated rows run with the helper UNELEVATED in test mode (no UAC, no human).
 | P2-EH-07 | kill switch | helper ends; after Resume it is not running |
 | P2-EH-F5 | (human, `XTRAOS_TEST_UAC=1`) UAC → admin cmd → `type ipconfig` + Enter → `read_text` | typed via the helper, output read |
 
+### P2-M6 Browser bridge (ADR 0032)
+A fake bridge in the test process runs every row except LIVE, so no browser and no human are needed.
+| ID | Test case | Expected |
+|---|---|---|
+| P2-BR-01 | bad token, then good token; list_browsers, tab_info, click text, missing element, huge DOM | `NEEDS_HUMAN` with nothing relayed; then compact results, `text=` selector, `ELEMENT_NOT_FOUND`, output cut at 60,000 characters |
+| P2-BR-02 | execute_script, cookies, `javascript:` URL, typing into a password field, "Buy now" | refused; none of them reaches the bridge |
+| P2-BR-03 | bridge not running | `NEEDS_HUMAN` + hint |
+| P2-BR-04 | Enter / Send click on web.whatsapp.com | dialog names the site; Deny → nothing sent; Allow → sent |
+| P2-BR-05 | kill switch | `STOPPED`, nothing sent |
+| P2-BR-LIVE | (`XTRAOS_TEST_BRIDGE=1`) list_browsers on the real bridge | browser count |
+
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).
 2. Fix → add/extend a test that would have caught it → re-run the full gate.

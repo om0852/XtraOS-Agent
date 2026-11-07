@@ -507,6 +507,42 @@ export const TOOLS: ToolDef[] = [
     run: forward('close_window', (r) => `ok closed ${r.ref}`),
   },
   {
+    name: 'browser',
+    description:
+      'Web pages in Chrome via the XtraDevPilot extension: precise CSS-selector / text targeting where UIA is weak. ' +
+      'Read: list_browsers, list_tabs, tab_info, dom (clean HTML; root = CSS selector for a part), ax_tree, wait_for ' +
+      '(selector, state visible|hidden|attached|detached). Act: click (selector OR text, contains), type (selector, text, ' +
+      'append), press_key (key, selector?, ctrl/shift/alt), scroll (direction, amount, to_selector), navigate / open_tab ' +
+      '(http/https url), switch_browser (browser_id). tab_id targets a tab. Same safety rules as the desktop: Enter / Send ' +
+      'on messaging sites asks the user, buy/pay is refused, password/OTP/card fields are refused. Not available: scripts, ' +
+      'cookies, storage, file upload. NEEDS_HUMAN when the XtraDevPilot bridge or extension is not running.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list_browsers', 'list_tabs', 'tab_info', 'dom', 'ax_tree', 'wait_for', 'click', 'type', 'press_key', 'scroll', 'navigate', 'open_tab', 'switch_browser'] },
+        selector: { type: 'string', description: 'CSS selector (XtraDevPilot also accepts text=…, text*=…, >>> chains)' },
+        text: { type: 'string', description: 'click: visible text; type: text to type' },
+        contains: { type: 'boolean', description: 'click by text: substring match' },
+        append: { type: 'boolean' },
+        key: { type: 'string', description: 'e.g. Enter, Tab, Escape, ArrowDown, a' },
+        ctrl: { type: 'boolean' }, shift: { type: 'boolean' }, alt: { type: 'boolean' },
+        root: { type: 'string', description: 'dom: CSS selector of the part to return' },
+        state: { type: 'string', enum: ['visible', 'hidden', 'attached', 'detached'] },
+        timeout_ms: { type: 'integer', minimum: 0, maximum: 55000 },
+        direction: { type: 'string', enum: ['up', 'down', 'left', 'right', 'top', 'bottom'] },
+        amount: { type: 'integer' },
+        to_selector: { type: 'string' },
+        url: { type: 'string', description: 'http:// or https:// only' },
+        background: { type: 'boolean' },
+        tab_id: { type: 'integer' },
+        browser_id: { type: 'integer' },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    run: forward('browser', (r) => r.text),
+  },
+  {
     name: 'elevated_helper',
     description:
       'Admin windows (e.g. "Administrator: Command Prompt") cannot be controlled by normal programs; tools on them return ' +

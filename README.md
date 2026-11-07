@@ -6,8 +6,8 @@ The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 
 > Status: **Phase 1 complete — Release 0.1 (unsigned developer preview)**, M1–M6 closed
 > (ADRs 0009–0020); **Phase 2: P2-M1 closed** (wait_for, batch, scoped observe; ADR 0023),
-> **P2-M2 closed** (OCR; ADR 0025), **P2-M3 closed** (app map, skills; ADR 0027), **P2-M4 built** (WhatsApp skill, resource discipline; ADR 0029), **P2-M5 built** (elevated admin helper; ADR 0031). The hands-off and UAC test runs are pending. Open: code signing and a fresh-machine test with Smart App Control on.
-> Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1`, `tests/phase2/p2m1-gate.ps1` … `p2m5-gate.ps1`
+> **P2-M2 closed** (OCR; ADR 0025), **P2-M3 closed** (app map, skills; ADR 0027), **P2-M4 built** (WhatsApp skill, resource discipline; ADR 0029), **P2-M5 built** (elevated admin helper; ADR 0031), **P2-M6 built** (browser bridge to XtraDevPilot; ADR 0033). The hands-off and UAC test runs are pending. Open: code signing and a fresh-machine test with Smart App Control on.
+> Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1`, `tests/phase2/p2m1-gate.ps1` … `p2m6-gate.ps1`
 > (`-Interactive` moves the mouse and types; keep hands off).
 
 ## Install (Release 0.1)
@@ -70,6 +70,7 @@ Recorded flows: [docs/flows](docs/flows/README.md) · Bench: [docs/bench/release
 | Skills: file skills (copy/move/rename/mkdir/list/open; delete → Recycle Bin after your OK; system + XtraOS folders protected) and JSON macro skills (policy per step) — routine file task in one call | verified — P2-M3 gate ([S1](docs/flows/S1.md)) |
 | Policy-file changes apply only after you approve them; activity detection ignores the agent's own input and mouse jitter | verified — P2-M3 gate |
 | `whatsapp.send` skill: text or file to a number, after your OK. It checks the chat is that number, restores your clipboard and closes what it opened | verified: P2-M4 e2e, real sends to the owner's own chat (ADR 0029) |
+| Web pages via the XtraDevPilot bridge (`browser`): selectors/text, same policy (messaging send asks, buy and password fields refused); no scripts or cookies | automated tests pass (fake bridge, ADR 0033); live check needs the token-enabled XtraDevPilot |
 | Admin windows (UIPI): opt-in `elevated_helper`, started through UAC for one session. It accepts only the core and asks you in its own elevated dialog for each admin window | automated tests pass (helper unelevated, ADR 0031); real UAC run pending |
 | Resource discipline: the agent marks the windows it opened, reuses them instead of opening duplicates, and `cleanup` closes only those; closing your windows asks first | verified: P2-M4 e2e (ADR 0029) |
 | Code-signed binaries (Smart App Control on) | not yet (owner decision, ADR 0019) |

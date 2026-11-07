@@ -230,7 +230,7 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
             || crate::safety::METHODS.contains(&m)
             || matches!(
                 m,
-                "batch" | "app_map" | "list_skills" | "run_skill" | "elevated_helper"
+                "batch" | "app_map" | "list_skills" | "run_skill" | "elevated_helper" | "browser"
             ) =>
         {
             let params = if params.is_null() { json!({}) } else { params };

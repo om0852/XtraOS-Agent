@@ -522,6 +522,9 @@ pub fn gather_targets(method: &str, p: &Value) -> (Facts, String, Vec<HWND>) {
         }
     }
     f.windows = hwnds.iter().map(|&h| window_facts(h)).collect();
+    if method == "browser" {
+        crate::browser::add_facts(p, &mut f, &mut what);
+    }
     (f, what, hwnds)
 }
 

@@ -258,7 +258,7 @@ pub fn name_is(name: &str, words: &[&str]) -> bool {
     words.iter().any(|w| clean == *w)
 }
 
-fn is_messaging(p: &str, title: &str) -> bool {
+pub fn is_messaging(p: &str, title: &str) -> bool {
     MESSAGING_PROCESSES.contains(&p)
         || (BROWSERS.contains(&p) && MESSAGING_TITLES.iter().any(|t| title.contains(t)))
 }
@@ -270,6 +270,13 @@ fn method_class(m: &str) -> Class {
         }
         m if m.starts_with("run_skill:") || m == "app_map" || m == "elevated_helper" => {
             Class::Observe
+        }
+        m if m.starts_with("browser:") => {
+            if crate::browser::is_observe(&m[8..]) {
+                Class::Observe
+            } else {
+                Class::Input
+            }
         }
         "launch_app" => Class::Launch,
         "cleanup" => Class::Close,
@@ -297,7 +304,7 @@ pub fn classify(f: &Facts) -> Vec<(Class, String)> {
     let m = f.method.as_str();
     let acts = INPUT_METHODS.contains(&m);
     if let Some(name) = &f.element {
-        if m == "click" || m == "set_value" {
+        if m == "click" || m == "set_value" || m == "browser:click" {
             if name_is(name, SEND_WORDS) {
                 out.push((Class::MessageSend, format!("\"{name}\"")));
             }
@@ -337,7 +344,12 @@ pub fn classify(f: &Facts) -> Vec<(Class, String)> {
     if let Some(c) = f.skill_class {
         out.push((c, f.method.clone()));
     }
-    if f.password && matches!(m, "type" | "set_value" | "press_keys") {
+    if f.password
+        && matches!(
+            m,
+            "type" | "set_value" | "press_keys" | "browser:type" | "browser:press_key"
+        )
+    {
         out.push((Class::CredentialEntry, "password field".into()));
     }
     out

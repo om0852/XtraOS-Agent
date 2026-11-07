@@ -63,7 +63,7 @@ try {
   check('status ok through the installed MCP (core auto-started)', !st.result?.isError && text.includes('· running ·'), text);
   check('status within 2 minutes of starting the install', secs <= 120, `${secs.toFixed(1)} s`);
   const tools = await rpc('tools/list', {});
-  check('28 tools exposed', tools.result.tools.length === 28, `${tools.result.tools.length}`);
+  check('29 tools exposed', tools.result.tools.length === 29, `${tools.result.tools.length}`);
   const conn = JSON.parse(fs.readFileSync(path.join(data, 'connection.json'), 'utf8'));
   pid = conn.pid;
   const exe = ps(['-Command', `(Get-Process -Id ${pid}).Path`]).trim();

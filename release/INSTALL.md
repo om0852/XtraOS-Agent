@@ -18,6 +18,20 @@ press **Ctrl+Alt+Esc**.
    - `-StartAtLogin` starts the core when you sign in (otherwise it starts on first use).
 3. Add the MCP server to your client with the command/JSON the installer prints.
 
+## Optional extras
+- **Web pages (the `browser` tool).** This uses the XtraDevPilot Chrome extension and its
+  bridge.
+  - You need an XtraDevPilot build that has the pairing token (`%USERPROFILE%\.xtradevpilot\bridge-token`).
+    Older builds without a token are not used.
+  - The XtraDevPilot MCP server must be running (it hosts the bridge on 127.0.0.1:42819),
+    with the extension loaded in Chrome.
+  - Without these, `browser` answers that you need to start them.
+- **Admin windows (the `elevated_helper` tool).** You approve a Windows administrator prompt
+  for each session. Nothing elevated is installed. The helper asks you before it touches
+  each admin window.
+- **Packaging.** This zip and `install.ps1` are the package; there is no MSI. Code signing
+  is still pending (see Requirements).
+
 ## Safety you can rely on
 - **Ctrl+Alt+Esc** (or the XtraOS tray icon → Stop) halts the agent instantly; only you can
   resume, from the tray icon.

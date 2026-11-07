@@ -46,6 +46,8 @@ pub fn dispatch_local(method: &str, p: &Value) -> Result<Value, ActError> {
         perceive::run(method, p)
     } else if input::METHODS.contains(&method) {
         input::run(method, p)
+    } else if method == "browser" {
+        crate::browser::run(p)
     } else if method == "app_map" {
         crate::appmap::run(p)
     } else if method == "list_skills" {
@@ -65,6 +67,7 @@ pub fn dispatch_local(method: &str, p: &Value) -> Result<Value, ActError> {
 
 /// Tools allowed inside a batch (ADR 0022). No nesting, no human questions, no images.
 pub const BATCH_TOOLS: &[&str] = &[
+    "browser",
     "click",
     "type",
     "press_keys",

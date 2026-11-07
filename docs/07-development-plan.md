@@ -72,7 +72,12 @@ only the windows it opened; closing a user window asks. Closes after the hands-o
 **P2-M5 elevated admin helper: built** (ADRs 0030, 0031). It is opt-in per session through UAC and
 locked to the core. It asks the user in its own elevated dialog for each admin window. The
 automated gate passes 11/11; it closes after the human F5 run with a real UAC prompt.
-**Next: P2-M6 browser bridge + packaging.**
+**P2-M6 browser bridge + packaging: built** (ADRs 0032, 0033). The core drives Chrome pages
+through the XtraDevPilot bridge (loopback + token, an action allowlist, the same policy); the
+zip + install.ps1 package stays (no MSI). The automated gate passes 12/12. The live check
+needs an XtraDevPilot build that includes the bridge security fix.
+**Phase 2 build complete; open: the hands-off interactive regression, F5 with real UAC, and
+P2-BR-LIVE.**
 
 ## Phase 3 — Reach
 

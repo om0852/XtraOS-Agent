@@ -1,0 +1,4 @@
+spikes/out/
+node_modules/
+target/
+*.log

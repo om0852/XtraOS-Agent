@@ -660,7 +660,7 @@ fn foreground_is(window: HWND) -> Result<(), ActError> {
 fn is_extended(vk: u16) -> bool {
     matches!(
         vk,
-        0x21..=0x28 | 0x2D | 0x2E | 0x5B | 0x5C | 0x5D | 0x6F | 0x90 | 0xA3 | 0xA5
+        0x21..=0x28 | 0x2D | 0x2E | 0x5B | 0x5C | 0x5D | 0x6F | 0x90 | 0xA3 | 0xA5 | 0xAD..=0xB3
     )
 }
 
@@ -699,6 +699,14 @@ pub fn named_vk(name: &str) -> Option<u16> {
         "capslock" => 0x14,
         "printscreen" | "prtsc" => 0x2C,
         "apps" | "contextmenu" => 0x5D,
+        // Media keys (they act system-wide, whatever window has focus)
+        "volumeup" | "volup" => 0xAF,
+        "volumedown" | "voldown" => 0xAE,
+        "volumemute" | "mute" => 0xAD,
+        "playpause" | "mediaplaypause" => 0xB3,
+        "nexttrack" | "medianext" => 0xB0,
+        "prevtrack" | "previoustrack" | "mediaprev" => 0xB1,
+        "mediastop" => 0xB2,
         _ => {
             if let Some(num) = n.strip_prefix('f').and_then(|d| d.parse::<u16>().ok()) {
                 if (1..=24).contains(&num) {

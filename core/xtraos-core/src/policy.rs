@@ -421,7 +421,9 @@ fn method_class(m: &str) -> Class {
         m if m.starts_with("run_skill:")
             || m == "app_map"
             || m == "elevated_helper"
-            || m == "record_session" =>
+            || m == "record_session"
+            || m == "volume:get"
+            || m == "system:read" =>
         {
             Class::Observe
         }

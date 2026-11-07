@@ -607,6 +607,37 @@ pub fn gather_targets(method: &str, p: &Value) -> (Facts, String, Vec<HWND>) {
             }
             what = format!("{method} {}", p["action"].as_str().unwrap_or("tap"));
         }
+        "system" => {
+            let op = p["op"].as_str().unwrap_or("");
+            match crate::sysctl::change_kind(p) {
+                None => f.method = "system:read".into(),
+                Some("system_settings") => {
+                    f.method = format!("system:{op}");
+                    f.skill_class = Some(policy::Class::SystemSettings);
+                }
+                Some(_) => f.method = format!("system:{op}"),
+            }
+            what = match op {
+                "brightness" if p.get("value").is_some() => {
+                    format!("set the screen brightness to {}", p["value"])
+                }
+                "wifi" | "bluetooth" if p.get("state").is_some() => {
+                    format!("turn {op} {}", p["state"].as_str().unwrap_or("?"))
+                }
+                "lock" => "lock the PC".into(),
+                "sleep" => "put the PC to sleep".into(),
+                o => format!("read {o}"),
+            };
+        }
+        "volume" => {
+            let op = p["op"].as_str().unwrap_or("get");
+            f.method = format!("volume:{op}");
+            what = match op {
+                "set" => format!("set the system volume to {}", p["value"]),
+                "change" => format!("change the system volume by {}", p["by"]),
+                o => format!("system volume {o}"),
+            };
+        }
         "elevated_helper" => {
             f.elevated = p.get("op").and_then(Value::as_str) == Some("start");
             what =

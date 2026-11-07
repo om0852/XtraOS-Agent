@@ -54,6 +54,11 @@ user's input. Password targets are never recorded; typed text becomes an editabl
 Touch / pen (ADR 0036): the same polite rules as the mouse. Multi-finger Windows gestures ask
 first.
 
+System controls and CLI (ADR 0039): `system` / `volume` use OS APIs only. Switching radios,
+lock and sleep ask first. Shutdown/restart, security, account, network and registry changes are
+not offered at all. The `xtraos-core call` command-line bridge pairs with the user-only token,
+like the MCP server, so it gets no extra power.
+
 Elevated admin helper (ADR 0030): opt-in per session, started only through a UAC prompt
 (nothing elevated is installed). One pipe connection, only from the core that started it
 (PID-checked both ways, squatting refused, same binary). The helper asks the user in its own

@@ -51,6 +51,10 @@ pub fn dispatch_local(method: &str, p: &Value) -> Result<Value, ActError> {
         input::run(method, p)
     } else if method == "browser" {
         crate::browser::run(p)
+    } else if method == "volume" {
+        crate::sysaudio::run(p)
+    } else if method == "system" {
+        crate::sysctl::run(p)
     } else if method == "touch" || method == "pen" {
         crate::touch::run(method, p)
     } else if method == "app_map" {
@@ -72,6 +76,8 @@ pub fn dispatch_local(method: &str, p: &Value) -> Result<Value, ActError> {
 
 /// Tools allowed inside a batch (ADR 0022). No nesting, no human questions, no images.
 pub const BATCH_TOOLS: &[&str] = &[
+    "volume",
+    "system",
     "browser",
     "touch",
     "pen",

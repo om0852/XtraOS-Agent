@@ -13,8 +13,13 @@ fn main() {
     if args.first().map(String::as_str) == Some("--elevated-helper") {
         std::process::exit(xtraos_core::helper::helper_main(&args));
     }
+    // `call <tool> [params]`: command-line bridge for any LLM / agent (ADR 0039).
+    if args.first().map(String::as_str) == Some("call") {
+        std::process::exit(xtraos_core::cli::call_main(&args));
+    }
     // `--verify-log`: check the action log's hash chain (ADR 0038); exit 0 = intact.
     if args.first().map(String::as_str) == Some("--verify-log") {
+        xtraos_core::cli::attach_console();
         let dir = pairing::data_dir().join("logs");
         let v = xtraos_core::actionlog::verify_dir(&dir);
         println!("{} ({})", v.message, dir.display());

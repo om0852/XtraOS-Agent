@@ -239,6 +239,8 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                     | "record_session"
                     | "touch"
                     | "pen"
+                    | "volume"
+                    | "system"
             ) =>
         {
             let params = if params.is_null() { json!({}) } else { params };

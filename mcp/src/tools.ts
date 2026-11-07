@@ -515,6 +515,42 @@ export const TOOLS: ToolDef[] = [
     run: forward('close_window', (r) => `ok closed ${r.ref}`),
   },
   {
+    name: 'system',
+    description:
+      'Common PC controls through the OS, in the background: battery (read), brightness (read; value 0-100 sets the ' +
+      'built-in screen), wifi / bluetooth (read; state on|off switches: asks the user first), lock and sleep (ask the ' +
+      'user first). Not offered: shutdown/restart/sign-out, firewall, antivirus, accounts, network or registry changes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['battery', 'brightness', 'wifi', 'bluetooth', 'lock', 'sleep'] },
+        value: { type: 'integer', minimum: 0, maximum: 100 },
+        state: { type: 'string', enum: ['on', 'off'] },
+      },
+      required: ['op'],
+      additionalProperties: false,
+    },
+    run: forward('system', (r) => r.text),
+  },
+  {
+    name: 'volume',
+    description:
+      'Windows speaker (master) volume, exact and in the background: op=get, set (value 0-100), change (by, e.g. -10), ' +
+      'mute, unmute. This is the system volume, not an app/player slider. Media keys for press_keys: VolumeUp, ' +
+      'VolumeDown, VolumeMute, PlayPause, NextTrack, PrevTrack, MediaStop.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['get', 'set', 'change', 'mute', 'unmute'] },
+        value: { type: 'integer', minimum: 0, maximum: 100 },
+        by: { type: 'integer', minimum: -100, maximum: 100 },
+      },
+      required: ['op'],
+      additionalProperties: false,
+    },
+    run: forward('volume', (r) => r.text),
+  },
+  {
     name: 'touch',
     description:
       'Real touch input (screen pixels) for touch-first apps: tap, long_press, drag (to_x/to_y), pinch (scale < 1 in, ' +

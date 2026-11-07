@@ -40,6 +40,7 @@ const RECORDABLE: &[&str] = &[
     "wait_for",
     "touch",
     "pen",
+    "volume",
 ];
 
 struct Recording {

@@ -8,7 +8,7 @@ import { McpClient, ROOT } from './helpers.ts';
 
 const contract = fs.readFileSync(path.join(ROOT, 'docs', '04-mcp-tool-contract.md'), 'utf8');
 const contractTools = new Set([...contract.matchAll(/^\|\s*`([a-z_]+)`\s*\|/gm)].map((m) => m[1]));
-const ALLOWED = ['app_map', 'ask_human', 'batch', 'browser', 'cleanup', 'click', 'clipboard', 'close_window', 'drag', 'elevated_helper', 'find', 'focus_window', 'frame_diff', 'launch_app', 'list_skills', 'list_windows', 'mouse', 'observe', 'ocr', 'pen', 'press_keys', 'read_text', 'record_session', 'run_skill', 'screenshot', 'scroll', 'set_value', 'status', 'touch', 'type', 'wait_for', 'wait_for_human', 'window_bounds'];
+const ALLOWED = ['app_map', 'ask_human', 'batch', 'browser', 'cleanup', 'click', 'clipboard', 'close_window', 'drag', 'elevated_helper', 'find', 'focus_window', 'frame_diff', 'launch_app', 'list_skills', 'list_windows', 'mouse', 'observe', 'ocr', 'pen', 'press_keys', 'read_text', 'record_session', 'run_skill', 'screenshot', 'scroll', 'set_value', 'status', 'system', 'touch', 'type', 'volume', 'wait_for', 'wait_for_human', 'window_bounds'];
 
 test('tools/list exposes exactly the built tools (M1-M6, P2-M1..M3)', async () => {
   const mcp = new McpClient({});

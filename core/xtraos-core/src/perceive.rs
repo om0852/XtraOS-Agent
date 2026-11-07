@@ -582,6 +582,7 @@ struct Entry {
     el: El,
     rid: Vec<i32>,
     password: bool,
+    name: String,
 }
 
 #[derive(Default)]
@@ -618,6 +619,7 @@ impl Table {
             if let Some(e) = self.refs.get_mut(&r) {
                 e.el = n.el.clone(); // fresher element object, same identity
                 e.password = n.info.password;
+                e.name = n.info.name.clone();
                 return r;
             }
         }
@@ -631,6 +633,7 @@ impl Table {
                 el: n.el.clone(),
                 rid: n.rid.clone(),
                 password: n.info.password,
+                name: n.info.name.clone(),
             },
         );
         r
@@ -668,6 +671,44 @@ pub fn parse_elem_ref(v: &Value) -> Option<u32> {
         .and_then(|s| s.strip_prefix('e'))
         .and_then(|d| d.parse::<u32>().ok())
         .filter(|&n| n != 0)
+}
+
+/// What the policy needs to know about a ref, from the table (no UIA call): window, name,
+/// password flag. None for unknown refs (the action itself reports STALE_REF).
+pub fn ref_facts(v: &Value) -> Option<(HWND, String, bool)> {
+    let n = parse_elem_ref(v)?;
+    with_table(|t| {
+        t.refs
+            .get(&n)
+            .map(|e| (e.win as HWND, e.name.clone(), e.password))
+    })
+}
+
+/// Name and password flag of the element under a screen point (policy for real clicks).
+pub fn element_at(p: POINT) -> Option<(String, bool)> {
+    let u = uia().ok()?;
+    unsafe {
+        let el =
+            u.a.ElementFromPoint(windows::Win32::Foundation::POINT { x: p.x, y: p.y })
+                .ok()?;
+        Some((
+            el.CurrentName().map(|b| b.to_string()).unwrap_or_default(),
+            el.CurrentIsPassword().map(|b| b.as_bool()).unwrap_or(false),
+        ))
+    }
+}
+
+/// True if the element with keyboard focus is a password field (typing there is denied).
+pub fn focused_is_password() -> bool {
+    let Ok(u) = uia() else {
+        return false;
+    };
+    unsafe {
+        u.a.GetFocusedElement()
+            .and_then(|e| e.CurrentIsPassword())
+            .map(|b| b.as_bool())
+            .unwrap_or(false)
+    }
 }
 
 /// A live element behind a ref, verified to still be the same element.
@@ -743,6 +784,7 @@ pub const METHODS: &[&str] = &["observe", "find", "read_text", "set_value", "scr
 
 pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
     input::init_dpi();
+    crate::safety::check()?;
     match method {
         "observe" => observe(p),
         "find" => find(p),
@@ -771,6 +813,11 @@ fn target_window(p: &Value) -> Result<HWND, ActError> {
         }
         Some(v) => winmgr::resolve_window(v)?,
     };
+    if crate::safety::is_own_window(h) {
+        return Err(crate::safety::blocked(
+            "that is an XtraOS window (overlay/dialog): only the user may use it",
+        ));
+    }
     if winmgr::is_elevated(h) {
         return Err(winmgr::elevation_required("reading this window"));
     }
@@ -1090,7 +1137,7 @@ fn keep_foreground<T>(
         let before = before_addr as HWND;
         for _ in 0..16 {
             sleep(Duration::from_millis(25));
-            if input::action_generation() != gen {
+            if input::action_generation() != gen || crate::safety::stopped() {
                 return;
             }
             let now = winmgr::foreground_root();

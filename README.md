@@ -4,9 +4,9 @@ A local **AI action runtime**: the bridge that lets any AI model see and operate
 (apps, browsers, terminals, files, games) safely, fast, and token-efficiently.
 The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 
-> Status: **Phase 1 — M1–M4 closed** (secure IPC, MCP, real input, windows & apps, perception
-> and background-first actions; ADRs 0009–0016). **Next: M5 Safety.** Gates:
-> `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m4-gate.ps1` (`-Interactive` moves
+> Status: **Phase 1 — M1–M5 closed** (secure IPC, MCP, real input, windows & apps, perception,
+> background-first actions, safety; ADRs 0009–0018). **Next: M6 Release 0.1.** Gates:
+> `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m5-gate.ps1` (`-Interactive` moves
 > the mouse and types into the testbed; `-Uac` needs a human UAC click; `-Browsers` opens Chrome/Firefox).
 
 ## Documents
@@ -42,5 +42,9 @@ The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 | Screenshots of a window or region with exact screen mapping | verified — M4 gate |
 | Background actions without the user's mouse/keyboard: `click(ref)`, `set_value`, `scroll(ref)`; focus kept with the user | verified — M4 gate (Calculator, WinForms) |
 | Polite real input: waits for the user to be idle, puts the cursor back; drag by element ref (Explorer → app) | verified — M4 gate |
+| Kill switch: Ctrl+Alt+Esc or tray Stop halts input (15 ms measured), only the user resumes | verified — M5 gate (ADR 0018) |
+| Policy engine: Send/Reply, delete, settings, admin launch need your OK; buying and password entry always blocked; password managers off limits; editable `policy.json` | verified — M5 gate |
+| Overlay banner while the agent acts (click-through, hidden from screenshots); agent can never use XtraOS's own windows | verified — M5 gate |
+| Ask the user: `ask_human` (yes/no, choice, info, task) + `wait_for_human` | verified — M5 gate |
 | Fast observe on windows with hundreds of list items | not yet (Phase 2; 222 ms measured vs 120 ms budget) |
 | OCR | not yet (Phase 2) |

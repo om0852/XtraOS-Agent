@@ -59,7 +59,8 @@ Code that disagrees with these documents is a bug, unless an ADR changes the doc
 ## 5. Engineering rules
 
 - **Languages:** core in Rust (stable, pinned toolchain). MCP server in TypeScript (Node LTS).
-  Tray/overlay app in Rust (Tauri). No other languages without an ADR.
+  Tray/overlay/approval UI: native Win32 inside the core in Phase 1 (ADR 0017; a separate
+  Tauri app may follow later). No other languages without an ADR.
 - **Every public tool** has: schema, contract entry, unit test, and one end-to-end test
   against the test harness app (`testbed/`).
 - **Errors** use the shared error codes in the tool contract (`ELEMENT_NOT_FOUND`,

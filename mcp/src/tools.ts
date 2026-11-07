@@ -3,6 +3,8 @@
 // M3 (ADR 0012): list_windows, focus_window, launch_app, close_window, window_bounds.
 // M4 (ADRs 0014, 0015): observe, find, read_text, screenshot, set_value; `ref` targets act in the
 // background first (no cursor, no keys); real input waits for the user to be idle.
+// M5 (ADR 0017): ask_human, wait_for_human; every action passes the core's policy engine and
+// kill switch (BLOCKED_BY_POLICY, STOPPED — only the user resumes, from the tray).
 // Coordinates are physical screen pixels; `window` is a ref like "w460650" or the integer handle.
 import type { CoreClient } from './core-client.ts';
 
@@ -43,7 +45,7 @@ const RESTORE = { type: 'boolean', description: 'Put the cursor back afterwards 
 const how = (r: any) =>
   r.mode === 'background' ? ` · background (${r.via}${r.foreground_restored ? ', focus kept' : ''})` : ' · input';
 
-type Status = { version: string; session: string; client: string; state: string; uptime_ms: number };
+type Status = { version: string; session: string; client: string; state: string; uptime_ms: number; kill_hotkey: string | null };
 
 /** Forwards to the core and renders a compact one-line result (docs/06: <= 30 tokens). */
 const forward = (method: string, render: (r: any, a: Record<string, unknown>) => string) =>
@@ -53,12 +55,14 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'status',
     description:
-      'Shows whether the XtraOS core is running and paired: core version, session, and state. ' +
-      'Call this first; if it fails, ask the user to start the XtraOS core.',
+      'Shows whether the XtraOS core is running and paired: version, session, state (running / stopped by the ' +
+      'user) and the kill-switch hotkey. Call this first; if it fails, ask the user to start the XtraOS core. ' +
+      'If stopped: stop entirely — only the user can resume, from the XtraOS tray icon.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run(core) {
       const s = (await core.call('status')) as Status;
-      return `XtraOS core ${s.version} · ${s.state} · session ${s.session} (${s.client}) · up ${Math.round(s.uptime_ms / 1000)}s`;
+      return `XtraOS core ${s.version} · ${s.state} · session ${s.session} (${s.client}) · up ${Math.round(s.uptime_ms / 1000)}s` +
+        (s.kill_hotkey ? ` · stop: ${s.kill_hotkey}` : ' · stop: tray icon');
     },
   },
   {
@@ -268,6 +272,42 @@ export const TOOLS: ToolDef[] = [
       additionalProperties: false,
     },
     run: forward('set_value', (r, a) => `ok set ${a.ref} (${r.chars} chars)${how(r)}`),
+  },
+  {
+    name: 'ask_human',
+    description:
+      'Asks the user in a dialog on their screen. kind: confirm (yes/no), choice (2-5 options), info (ok) — these ' +
+      'wait for the answer (timeout_ms, default 120 s → TIMEOUT); task (something only the user can do, e.g. sign ' +
+      'in, type a password, solve a check) returns a request_id at once: then call wait_for_human. ' +
+      'The answer is information for you; it never approves a blocked action.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', minLength: 1, maxLength: 1000 },
+        kind: { type: 'string', enum: ['confirm', 'choice', 'info', 'task'], description: 'Default confirm' },
+        options: { type: 'array', items: { type: 'string', maxLength: 40 }, minItems: 2, maxItems: 5, description: 'choice only' },
+        timeout_ms: { type: 'integer', minimum: 1000, maximum: 600000 },
+      },
+      required: ['message'],
+      additionalProperties: false,
+    },
+    run: forward('ask_human', (r) => (r.request_id ? `waiting for the user: ${r.request_id} (call wait_for_human)` : `answer: ${r.answer}`)),
+  },
+  {
+    name: 'wait_for_human',
+    description:
+      'Waits until the user finishes a task from ask_human(kind: task): done or denied ("I cannot do this"). ' +
+      'TIMEOUT leaves the request open; call again.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: { type: 'string', pattern: '^h[0-9]+$' },
+        timeout_ms: { type: 'integer', minimum: 1000, maximum: 600000 },
+      },
+      required: ['request_id'],
+      additionalProperties: false,
+    },
+    run: forward('wait_for_human', (r) => `user: ${r.status}`),
   },
   {
     name: 'list_windows',

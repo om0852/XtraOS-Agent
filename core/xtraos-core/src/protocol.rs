@@ -16,7 +16,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Methods from docs/04-mcp-tool-contract.md that exist on paper but not yet in the core.
-const PLANNED_METHODS: &[&str] = &["wait_for", "ask_human", "wait_for_human"];
+const PLANNED_METHODS: &[&str] = &["wait_for"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
@@ -214,16 +214,19 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                 "version": VERSION,
                 "session": session.id,
                 "client": session.client,
-                "state": "running",
+                "state": if crate::safety::stopped() { "stopped" } else { "running" },
                 "uptime_ms": ctx.started.elapsed().as_millis() as u64,
                 "pipe": ctx.pipe,
+                "stopped": crate::safety::stopped(),
+                "kill_hotkey": crate::safety::hotkey_name(),
             }),
             method,
         ),
         "pair" => invalid(&id, "already paired", &method),
         m if crate::input::METHODS.contains(&m)
             || crate::winmgr::METHODS.contains(&m)
-            || crate::perceive::METHODS.contains(&m) =>
+            || crate::perceive::METHODS.contains(&m)
+            || crate::safety::METHODS.contains(&m) =>
         {
             let params = if params.is_null() { json!({}) } else { params };
             if !params.is_object() {

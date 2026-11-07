@@ -8,9 +8,9 @@ import { McpClient, ROOT } from './helpers.ts';
 
 const contract = fs.readFileSync(path.join(ROOT, 'docs', '04-mcp-tool-contract.md'), 'utf8');
 const contractTools = new Set([...contract.matchAll(/^\|\s*`([a-z_]+)`\s*\|/gm)].map((m) => m[1]));
-const ALLOWED = ['click', 'clipboard', 'close_window', 'drag', 'find', 'focus_window', 'launch_app', 'list_windows', 'mouse', 'observe', 'press_keys', 'read_text', 'screenshot', 'scroll', 'set_value', 'status', 'type', 'window_bounds'];
+const ALLOWED = ['ask_human', 'click', 'clipboard', 'close_window', 'drag', 'find', 'focus_window', 'launch_app', 'list_windows', 'mouse', 'observe', 'press_keys', 'read_text', 'screenshot', 'scroll', 'set_value', 'status', 'type', 'wait_for_human', 'window_bounds'];
 
-test('tools/list exposes exactly the built tools (M1-M4)', async () => {
+test('tools/list exposes exactly the built tools (M1-M5)', async () => {
   const mcp = new McpClient({});
   try {
     await mcp.init();
@@ -41,5 +41,16 @@ test('unknown tool and unexpected arguments are INVALID_ARGS (no core needed)', 
     assert.ok(a.isError && a.text.startsWith('ERROR INVALID_ARGS'), a.text);
     const b = await mcp.callTool('click', { x: 1, y: 1, bogus: 1 });
     assert.ok(b.isError && b.text.startsWith('ERROR INVALID_ARGS'), b.text);
+  } finally { await mcp.close(); }
+});
+
+// M5: there is no way for the agent to resume after the kill switch (ADR 0017).
+test('no resume / unstop tool exists', async () => {
+  const mcp = new McpClient({});
+  try {
+    await mcp.init();
+    const r = await mcp.rpc('tools/list');
+    const names: string[] = r.result.tools.map((t: { name: string }) => t.name);
+    assert.ok(!names.some((n) => /resume|unstop|unpause|kill|policy/.test(n)), names.join(','));
   } finally { await mcp.close(); }
 });

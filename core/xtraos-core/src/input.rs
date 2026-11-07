@@ -218,7 +218,14 @@ pub fn init_dpi() {
     });
 }
 
+/// Every injected event goes through here: nothing is sent after the kill switch (M5).
 fn send(inputs: &[INPUT]) -> Result<(), ActError> {
+    crate::safety::check()?;
+    send_always(inputs)
+}
+
+/// Only for releasing held buttons/keys: must work even after the kill switch.
+fn send_always(inputs: &[INPUT]) -> Result<(), ActError> {
     let n = unsafe {
         SendInput(
             inputs.len() as u32,
@@ -320,7 +327,7 @@ fn move_abs(p: POINT) -> Result<(), ActError> {
     )])
 }
 
-fn root_at(p: POINT) -> HWND {
+pub fn root_at(p: POINT) -> HWND {
     unsafe { GetAncestor(WindowFromPoint(p), GA_ROOT) }
 }
 
@@ -392,6 +399,7 @@ pub fn wait_user_idle(o: &Polite) -> Result<(), ActError> {
     }
     let start = unsafe { GetTickCount() };
     loop {
+        crate::safety::check()?;
         let now = unsafe { GetTickCount() };
         match user_idle(now, last_input_tick(), LAST_INJECT.load(Ordering::Relaxed)) {
             None => return Ok(()),
@@ -400,7 +408,13 @@ pub fn wait_user_idle(o: &Polite) -> Result<(), ActError> {
                 if now.wrapping_sub(start) >= o.timeout_ms {
                     return Err(err(
                         "USER_ACTIVE",
-                        format!("the user is working (last input {ms} ms ago); nothing was sent"),
+                        format!(
+                            "the user is working (last input {ms} ms ago; the core's own last input {}); nothing was sent",
+                            match LAST_INJECT.load(Ordering::Relaxed) {
+                                0 => "never".to_string(),
+                                t => format!("{} ms ago", now.wrapping_sub(t)),
+                            }
+                        ),
                         "Retry later, use a ref (background, no mouse/keys), or ask_human.",
                     ));
                 }
@@ -414,6 +428,9 @@ pub fn wait_user_idle(o: &Polite) -> Result<(), ActError> {
 
 /// Puts the cursor back where the user left it, unless the user has moved it since.
 fn restore_cursor(o: &Polite, start: POINT, g: &MouseGuard) {
+    if crate::safety::stopped() {
+        return;
+    }
     if o.restore_cursor && !g.user_moved() && cursor() != start && on_desktop(start).is_ok() {
         let _ = move_abs(start);
     }
@@ -446,6 +463,11 @@ impl MouseGuard {
 
     fn check_target(&self, p: POINT, window: Option<HWND>) -> Result<(), ActError> {
         let under = root_at(p);
+        if crate::safety::is_own_window(under) {
+            return Err(crate::safety::blocked(
+                "that point is on an XtraOS window (overlay/dialog): only the user may click it",
+            ));
+        }
         if !under.is_null() && crate::winmgr::is_elevated(under) {
             return Err(crate::winmgr::elevation_required("input at this point"));
         }
@@ -502,7 +524,7 @@ impl ButtonHold {
     fn release(&mut self) -> Result<(), ActError> {
         if self.down {
             self.down = false;
-            send(&[mouse(self.up, 0, 0, 0)])?;
+            send_always(&[mouse(self.up, 0, 0, 0)])?;
         }
         Ok(())
     }
@@ -531,7 +553,7 @@ impl ModHold {
 impl Drop for ModHold {
     fn drop(&mut self) {
         for &m in self.0.iter().rev() {
-            let _ = send(&[key_event(m, true)]);
+            let _ = send_always(&[key_event(m, true)]);
         }
     }
 }
@@ -815,6 +837,7 @@ pub const METHODS: &[&str] = &[
 pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
     init_dpi();
     let _one_at_a_time = action_lock();
+    crate::safety::check()?; // queued behind another action when the kill switch fired
     match method {
         "click" => click(p),
         "mouse" => mouse_action(p),

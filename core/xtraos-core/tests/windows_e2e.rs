@@ -189,7 +189,7 @@ async fn win03_uac_launch_then_input_requires_elevation() {
     }
     let _s = SERIAL.lock().await;
     let mut core = Core::start().await;
-    eprintln!(">>> A Windows admin (UAC) prompt will appear: click Yes.");
+    eprintln!(">>> XtraOS asks first (M5 policy: elevated = confirm): click \"Allow once\"; then the Windows admin (UAC) prompt: click Yes.");
     let w = core
         .ok(
             "launch_app",

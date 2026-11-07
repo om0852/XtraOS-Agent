@@ -9,7 +9,9 @@
 (P1-IN-07) moved to M4.
 **M3 Windows & apps: closed** (ADRs 0012, 0013) — gate 9/9 PASS, 0 SKIP incl. UAC + browser
 flow F3. **M4 Perception + background-first actions: closed** (ADRs 0014–0016) — gate 10/10
-PASS, 0 SKIP; large-list observe latency is a stated miss (Phase 2). **Next: M5 Safety.** Only work on the current phase (see CLAUDE.md §3).
+PASS, 0 SKIP; large-list observe latency is a stated miss (Phase 2). **M5 Safety: closed**
+(ADRs 0017, 0018) — kill switch 15 ms, policy + approvals, overlay; safety e2e 6/6.
+**Next: M6 Release 0.1.** Only work on the current phase (see CLAUDE.md §3).
 Each milestone has exit criteria; a milestone is done only when all are met and evidenced.
 
 ## Phase 0 — Spikes & skeleton (≈ 1 week)

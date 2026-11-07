@@ -200,7 +200,13 @@ pub fn resolve_window(v: &Value) -> Result<HWND, ActError> {
             "It may have closed. Call list_windows.",
         ));
     }
-    Ok(unsafe { GetAncestor(h, GA_ROOT) })
+    let root = unsafe { GetAncestor(h, GA_ROOT) };
+    if crate::safety::is_own_window(root) {
+        return Err(crate::safety::blocked(
+            "that is an XtraOS window (overlay/dialog/tray): only the user may use it",
+        ));
+    }
+    Ok(root)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -293,6 +299,11 @@ fn own_integrity() -> u32 {
 
 /// True if the window's process runs at a higher integrity level than the core, or its token
 /// is unreadable (conservative: we must not try to drive it; UIPI would drop input silently).
+/// Top-level window under a screen point.
+pub fn root_at(p: crate::input::POINT) -> HWND {
+    crate::input::root_at(p)
+}
+
 pub fn exists(h: HWND) -> bool {
     !h.is_null() && unsafe { IsWindow(h) } != 0
 }
@@ -440,6 +451,7 @@ pub const METHODS: &[&str] = &[
 pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
     crate::input::init_dpi();
     crate::input::next_action();
+    crate::safety::check()?;
     match method {
         "list_windows" => list_windows(p),
         "focus_window" => focus_window(p),

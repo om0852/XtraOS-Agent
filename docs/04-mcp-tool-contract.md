@@ -66,12 +66,16 @@ all real-input tools accept `idle_ms`. `drag` ends can be refs: `from_ref`, `to_
 
 ## Flow control & human in the loop
 
+M5 (ADR 0017): every OS action passes the core's policy engine first (`BLOCKED_BY_POLICY`;
+`confirm` classes show a core dialog to the user). After the kill switch (Ctrl+Alt+Esc or tray
+Stop) every call returns `STOPPED` until the user resumes from the tray; there is no resume tool.
+
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
 | `wait_for` | `window?`, `ref_gone?`, `text_contains?`, `window_title?`, `idle_ms?` | ok / TIMEOUT | P1 |
-| `ask_human` | `message`, `kind` (confirm/choice/info), `options?` | answer | P1 |
-| `wait_for_human` | `request_id` | done / denied | P1 |
-| `status` | — | running/stopped, paired client, policy profile | P1 |
+| `ask_human` | `message`, `kind` (confirm/choice/info/task), `options?` (choice: 2–5), `timeout_ms?` (default 120 s) | answer (`yes`/`no`/option/`ok`); `task` → `request_id` at once | P1 (M5) |
+| `wait_for_human` | `request_id`, `timeout_ms?` | `done` / `denied` (else `TIMEOUT`) | P1 (M5) |
+| `status` | — | running/stopped, paired client, kill hotkey, policy file (M5) | P1 |
 
 ## Skills & memory (P2)
 

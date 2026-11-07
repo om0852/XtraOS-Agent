@@ -103,6 +103,12 @@ class Testbed : Form
             Reg(name, b);
         }
 
+        // A "Send" button (M5 policy tests: message_send must be confirmed by the user).
+        var send = new Button { Text = "Send", Location = new Point(600, 20), Size = new Size(110, 44), TabStop = false };
+        clicks["send"] = 0;
+        send.Click += delegate { clicks["send"]++; };
+        Reg("send", send);
+
         pad = new Panel { Location = new Point(420, 20), Size = new Size(150, 80), BackColor = Color.LightSteelBlue };
         pad.MouseDown += (s, e) => padEvents.Add(e.Button + ":" + e.Clicks);
         Reg("pad", pad);

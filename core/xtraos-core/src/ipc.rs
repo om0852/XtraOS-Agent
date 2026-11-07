@@ -64,6 +64,11 @@ fn create_instance(
 /// Creates the first pipe instance immediately (so squatting/ACL errors surface here) and
 /// starts the accept loop.
 pub fn start(cfg: ServerConfig) -> io::Result<ServerHandle> {
+    // Kill switch, tray, overlay, dialogs (ADR 0017). If it cannot start, OS actions are
+    // refused later with a clear error; the pipe still serves `status`.
+    if !crate::safety::ensure_started() {
+        eprintln!("[xtraos-core] WARNING: safety UI unavailable: OS actions will be refused");
+    }
     let sid = winsec::current_user_sid()?;
     let mut sa = OwnedSecurityAttributes::from_sddl(&winsec::pipe_sddl(&sid))?;
     let first = create_instance(&cfg.pipe_name, &mut sa, true)?;
@@ -143,26 +148,44 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
         };
 
         // OS actions run on a blocking thread; the reply and log reflect the real result.
+        let mut policy: Option<&'static str> = None;
+        let mut policy_note: Option<String> = None;
         let (outcome, info) = match outcome {
             Outcome::Execute { id, method, params } => {
                 let m = method.clone();
                 let res = tokio::task::spawn_blocking(move || {
-                    if crate::winmgr::METHODS.contains(&m.as_str()) {
+                    // Policy gate first (may show a confirm dialog), then the action.
+                    let approval = crate::safety::authorize(&m, &params)?;
+                    let r = if crate::safety::METHODS.contains(&m.as_str()) {
+                        crate::safety::run(&m, &params)
+                    } else if crate::winmgr::METHODS.contains(&m.as_str()) {
                         crate::winmgr::run(&m, &params)
                     } else if crate::perceive::METHODS.contains(&m.as_str()) {
                         crate::perceive::run(&m, &params)
                     } else {
                         input::run(&m, &params)
-                    }
+                    };
+                    Ok::<_, input::ActError>((r, approval))
                 })
-                .await
-                .unwrap_or_else(|e| {
-                    Err(input::ActError {
+                .await;
+                let res = match res {
+                    Ok(Ok((r, approval))) => {
+                        policy = Some(approval.decision);
+                        policy_note = approval.policy_note;
+                        r
+                    }
+                    Ok(Err(e)) => {
+                        if e.code == "BLOCKED_BY_POLICY" {
+                            policy = Some("blocked");
+                        }
+                        Err(e)
+                    }
+                    Err(e) => Err(input::ActError {
                         code: "INTERNAL",
                         message: format!("action panicked: {e}"),
                         hint: "",
-                    })
-                });
+                    }),
+                };
                 match res {
                     Ok(v) => (
                         Outcome::Reply(serde_json::json!({"jsonrpc":"2.0","id":id,"result":v})),
@@ -186,6 +209,19 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
             other => (other, info),
         };
 
+        if let Some(n) = &policy_note {
+            // A changed policy file is recorded before the action it applies to (docs/05).
+            shared.log.record(&Entry {
+                ts_ms: protocol::now_ms(),
+                session: conn.session.as_ref().map(|s| s.id.as_str()),
+                client: conn.session.as_ref().map(|s| s.client.as_str()),
+                method: "policy_load",
+                ok: true,
+                code: None,
+                ms: 0.0,
+                policy: Some(n),
+            });
+        }
         shared.log.record(&Entry {
             ts_ms: protocol::now_ms(),
             session: conn.session.as_ref().map(|s| s.id.as_str()),
@@ -194,6 +230,7 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
             ok: info.ok,
             code: info.code,
             ms: t0.elapsed().as_secs_f64() * 1000.0,
+            policy,
         });
 
         let (reply, close) = match outcome {

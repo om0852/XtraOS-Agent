@@ -15,6 +15,9 @@ pub struct Entry<'a> {
     pub ok: bool,
     pub code: Option<&'a str>,
     pub ms: f64,
+    /// Policy decision for OS actions (M5): allow / confirmed / blocked; or a policy reload note.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy: Option<&'a str>,
 }
 
 pub struct ActionLog {

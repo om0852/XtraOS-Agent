@@ -17,6 +17,7 @@ path = "src/main.rs"
 #  windows    - Microsoft's official bindings, used ONLY for COM / UI Automation and GDI capture
 #               (ADR 0015: UIA vtables are too large to declare by hand safely)
 #  png        - pure-Rust PNG encoder for screenshots (ADR 0015)
+#               windows is also used for the safety UI: hotkey, tray, overlay, dialogs (ADR 0017)
 [dependencies]
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
@@ -30,4 +31,9 @@ windows = { version = "=0.62.2", features = [
   "Win32_System_Ole",
   "Win32_System_Variant",
   "Win32_UI_Accessibility",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_LibraryLoader",
 ] }

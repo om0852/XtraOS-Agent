@@ -54,7 +54,7 @@ stateless translator. The tray app is the human's control surface.
 - Shapes outputs for token efficiency (compact text trees, no pretty-printed JSON).
 - Holds **no** OS logic and **no** state except the pipe connection.
 
-### 2.3 xtraos-tray (Tauri)
+### 2.3 xtraos-tray (Phase 1: native UI inside the core, ADR 0017; Tauri app later)
 
 - System tray icon + status (Idle / Running / Waiting for you / Stopped).
 - **Overlay**: transparent, top-most, click-through window showing the cursor target and a

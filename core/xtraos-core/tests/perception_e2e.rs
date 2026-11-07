@@ -347,7 +347,8 @@ async fn in08_per07_set_value_and_password_masking() {
     let r = core
         .call("set_value", json!({"ref": pw, "value": "x"}))
         .await;
-    assert_eq!(code(&r), "NEEDS_HUMAN", "{r}");
+    // M5: policy denies credential_entry before the action runs (ADR 0017).
+    assert_eq!(code(&r), "BLOCKED_BY_POLICY", "{r}");
     let f = core
         .ok("find", json!({"window": tb.window(), "query": "hunter2"}))
         .await;

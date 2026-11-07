@@ -254,7 +254,7 @@ async fn in01_ten_clicks_land_on_the_right_buttons() {
     let _s = SERIAL.lock().await;
     let mut tb = Testbed::start();
     let mut core = Core::start().await;
-    let mut expected = json!({"btnA": 0, "btnB": 0, "btnC": 0});
+    let mut expected = json!({"btnA": 0, "btnB": 0, "btnC": 0, "send": 0});
     for (name, n) in [("btnA", 4), ("btnB", 3), ("btnC", 3)] {
         for i in 0..n {
             let r = click(&mut core, &tb, name, json!({})).await;
@@ -277,7 +277,7 @@ async fn in01_ten_clicks_land_on_the_right_buttons() {
     let st = tb.state();
     assert_eq!(
         st["clicks"],
-        json!({"btnA": 4, "btnB": 3, "btnC": 3}),
+        json!({"btnA": 4, "btnB": 3, "btnC": 3, "send": 0}),
         "{st}"
     );
     assert_nothing_stuck();
@@ -517,7 +517,7 @@ async fn in11_point_outside_target_window_is_refused() {
     assert_eq!(code(&r), "TARGET_OBSCURED", "{r}");
     assert_eq!(
         tb.state()["clicks"],
-        json!({"btnA": 0, "btnB": 0, "btnC": 0})
+        json!({"btnA": 0, "btnB": 0, "btnC": 0, "send": 0})
     );
     core.stop().await;
 }
@@ -526,19 +526,22 @@ async fn in11_point_outside_target_window_is_refused() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "interactive: types into the testbed"]
 async fn log02_typed_password_is_never_logged() {
+    // M5 (ADR 0017): typing into a password field is credential_entry = always denied, so
+    // nothing is typed at all; the refused attempt is logged without the text.
     let _s = SERIAL.lock().await;
     let mut tb = Testbed::start();
     let mut core = Core::start().await;
     click_ok(&mut core, &tb, "password", json!({})).await;
     let secret = "SECRET-xtra-7";
     let r = core
-        .ok("type", json!({"window": tb.hwnd, "text": secret}))
+        .call("type", json!({"window": tb.hwnd, "text": secret}))
         .await;
+    assert_eq!(code(&r), "BLOCKED_BY_POLICY", "{r}");
     assert!(
         !r.to_string().contains("SECRET"),
         "result must not echo the text: {r}"
     );
-    assert_eq!(tb.state()["passwordLen"], secret.len());
+    assert_eq!(tb.state()["passwordLen"], 0, "nothing typed");
     let log = std::fs::read_to_string(core.log.path()).unwrap();
     assert!(
         !log.contains("SECRET"),
@@ -546,7 +549,7 @@ async fn log02_typed_password_is_never_logged() {
     );
     assert!(
         log.contains("\"method\":\"type\""),
-        "the type action itself is logged"
+        "the refused type action itself is logged"
     );
     core.stop().await;
 }

@@ -20,6 +20,8 @@ $steps = @(
   @{ Name = 'MCP contract + e2e tests';          Dir = 'mcp';     Cmd = 'npm test --silent' },
   @{ Name = 'testbed build';                     Dir = 'testbed'; Cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1' }
 )
+$steps += @{ Name = 'Node SDK test';                    Dir = 'sdk/node';   Cmd = 'node --test test/sdk.test.mjs' }
+$steps += @{ Name = 'Python SDK test';                  Dir = 'sdk\python'; Cmd = 'python -m unittest discover -s tests' }
 $steps += @{ Name = 'MCP bundle (esbuild)';             Dir = 'mcp';     Cmd = 'npm run --silent bundle' }
 $steps += @{ Name = 'release bundle build';             Dir = 'release'; Cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File build-release.ps1' }
 $steps += @{ Name = 'clean-profile install test (REL-01)'; Dir = '.';    Cmd = 'node release/test-install.mjs' }

@@ -242,6 +242,7 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                     | "volume"
                     | "system"
                     | "sandbox"
+                    | "audit_export"
             ) =>
         {
             let params = if params.is_null() { json!({}) } else { params };

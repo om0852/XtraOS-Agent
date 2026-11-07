@@ -98,6 +98,10 @@ multi-finger gestures, recording/replay, macOS platform (CGEvent, AX, ScreenCapt
 
 ## Phase 4 — Platform
 
+**Part 1 built** (ADR 0042): `audit_export` (CSV/JSON, chain check, head hash), the Node SDK
+(`sdk/node`) and the Python SDK (`sdk/python`). Open: Linux (needs a Linux machine), team
+policies (needs an org model from the owner), skill registry (later, with connectors/plugins).
+
 Linux (AT-SPI, libei/portals), SDKs (Node/Python), team policies + audit export, skill registry.
 
 ## Working agreement

@@ -8,6 +8,7 @@
 //! Only this crate talks to the OS (CLAUDE.md §3).
 pub mod actionlog;
 pub mod appmap;
+pub mod audit;
 pub mod browser;
 pub mod capture;
 pub mod cli;

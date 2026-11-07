@@ -21,7 +21,7 @@ path = "src/main.rs"
 #               and the built-in Windows OCR engine (WinRT Windows.Media.Ocr, ADR 0024)
 [dependencies]
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.154"
+serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
 png = "=0.18.1"
 windows = { version = "=0.62.2", features = [

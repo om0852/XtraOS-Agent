@@ -27,6 +27,9 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, ActError> {
     if method == "sandbox" {
         return crate::sandbox::run(p);
     }
+    if method == "audit_export" {
+        return crate::audit::run(p);
+    }
     if crate::helper::owns_refs(p) {
         return crate::helper::forward(method, p);
     }

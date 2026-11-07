@@ -454,6 +454,7 @@ fn method_class(m: &str) -> Class {
         }
         "launch_app" | "sandbox:launch" => Class::Launch,
         "sandbox:close" => Class::Close,
+        "audit_export" => Class::FileChange,
         "cleanup" => Class::Close,
         "close_window" => Class::Close,
         _ => Class::Input,

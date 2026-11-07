@@ -386,6 +386,41 @@ mod tests {
     }
 
     #[test]
+    fn awkward_float_timings_verify() {
+        // Found on the owner's PC: "ms":0.013600000000000001 failed the check because the
+        // default float parser is not exact. serde_json's float_roundtrip fixes it.
+        let d = dir("float");
+        let a = ActionLog::create(&d).unwrap();
+        let mut ms = 0.0136f64;
+        for i in 0..500 {
+            ms = ms * 1.000_000_7 + 1e-17 * i as f64;
+            a.record(&Entry {
+                ts_ms: 1,
+                session: None,
+                client: None,
+                method: "m",
+                ok: true,
+                code: None,
+                ms,
+                policy: None,
+            });
+        }
+        a.record(&Entry {
+            ts_ms: 1,
+            session: None,
+            client: None,
+            method: "m",
+            ok: true,
+            code: None,
+            ms: 0.1 + 0.2,
+            policy: None,
+        });
+        let v = verify_dir(&d);
+        assert!(v.ok, "{v:?}");
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
     fn chain_ok_across_files() {
         let d = dir("ok");
         write_two_files(&d);

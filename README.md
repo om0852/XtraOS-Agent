@@ -73,6 +73,7 @@ Recorded flows: [docs/flows](docs/flows/README.md) · Bench: [docs/bench/release
 | Web pages via the XtraDevPilot bridge (`browser`): selectors/text, same policy (messaging send asks, buy and password fields refused); no scripts or cookies | automated tests pass (fake bridge, ADR 0033); live check needs the token-enabled XtraDevPilot |
 | Long and virtualised lists: off-screen rows found, `find deep` reaches Explorer rows never drawn, a row click selects (never opens) | verified: P2-M7 automated tests (ADR 0035) |
 | Send/Buy/Delete safety words in Hindi, Marathi, Spanish, French, German, Portuguese; read-only "Rules and activity" viewer (tray) | verified: unit + viewer test (ADR 0035) |
+| SDKs: `sdk/node` (`@xtraos/sdk`) and `sdk/python` (`xtraos`); `audit_export` for the action log (CSV/JSON + chain head hash) | verified: SDK-N1, SDK-P1, AX-01 (ADR 0042) |
 | `sandbox`: the agent works in a disposable Windows Sandbox desktop with its own cursor, in parallel with you (network off by default) | channel verified; live run needs Windows Sandbox enabled (ADR 0040) |
 | Command-line bridge `xtraos-core call <tool> [json]` for any LLM/agent with a shell; `volume` (exact system volume), media keys, `system` (battery, brightness, Wi-Fi/Bluetooth, lock, sleep; switching asks first) | verified live on this PC (ADR 0039) |
 | Tamper-evident action log (hash chain; `xtraos-core --verify-log`) and a max-actions-per-task guard that asks you to continue | verified: LG-01, TL-01 (ADR 0038) |

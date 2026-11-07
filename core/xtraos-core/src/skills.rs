@@ -237,7 +237,7 @@ fn own_dirs() -> Vec<PathBuf> {
 }
 
 /// Normalised + checked path (and its real target if it exists: junctions cannot sneak around).
-fn checked(p: &str) -> Result<PathBuf, ActError> {
+pub(crate) fn checked(p: &str) -> Result<PathBuf, ActError> {
     let n = normalize(p).ok_or_else(|| bad(format!("'{p}' must be an absolute path")))?;
     let own = own_dirs();
     if let Some(why) = protected_reason(&n, &own) {

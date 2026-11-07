@@ -1,0 +1,21 @@
+{
+  "name": "@xtraos/sdk",
+  "version": "0.1.0",
+  "description": "Node client for the XtraOS Agent core (Windows): call XtraOS tools from scripts and agents.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": ["index.js", "index.d.ts", "README.md"],
+  "os": ["win32"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test test/sdk.test.mjs"
+  },
+  "private": true
+}

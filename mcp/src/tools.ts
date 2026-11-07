@@ -515,6 +515,24 @@ export const TOOLS: ToolDef[] = [
     run: forward('close_window', (r) => `ok closed ${r.ref}`),
   },
   {
+    name: 'audit_export',
+    description:
+      'Exports the XtraOS action log (what the agent did; no secrets) for a date range as CSV (default) or JSON, with the ' +
+      'log chain check and the head hash. from/to: YYYY-MM-DD (local, inclusive). out: file path (default your ' +
+      'Documents folder, xtraos-audit-<from>_<to>.csv); never overwrites; protected folders are refused.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' },
+        to: { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' },
+        format: { type: 'string', enum: ['csv', 'json'] },
+        out: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+    run: forward('audit_export', (r) => r.text),
+  },
+  {
     name: 'sandbox',
     description:
       'A separate, disposable Windows desktop (Windows Sandbox) where the agent works with its OWN cursor and keyboard, ' +

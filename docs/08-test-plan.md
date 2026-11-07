@@ -247,6 +247,14 @@ A fake bridge in the test process runs every row except LIVE, so no browser and 
 | P3-SB-05 | `stop`; then `call`; `start` without the feature | agent ends; `NEEDS_HUMAN`; `NEEDS_HUMAN` with steps |
 | P3-SB-LIVE | (human, Sandbox enabled) start → Notepad + type inside → read back → screenshot → stop | text read back; the user's cursor untouched |
 
+### Phase 4 part 1 (ADR 0042)
+| ID | Test case | Expected |
+|---|---|---|
+| AX-01 | `audit_export` CSV and JSON on a private 3-entry log; again to the same file; date filter; output in the XtraOS data folder | 3 entries, chain OK, head hash = last line; CSV quoting; `INVALID_ARGS` (no overwrite); 0 entries; `BLOCKED_BY_POLICY` |
+| SDK-N1 | Node SDK against a private core: status, list_windows, a bad argument, a wrong token | results; `XtraOSError INVALID_ARGS`; refused |
+| SDK-P1 | Python SDK: same | same |
+| CLI-02 | `xtraos-core call` starts the core while its output goes through a pipe | returns at once (the core inherits no handles) |
+
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).
 2. Fix → add/extend a test that would have caught it → re-run the full gate.

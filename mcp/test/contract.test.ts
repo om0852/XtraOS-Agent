@@ -8,7 +8,7 @@ import { McpClient, ROOT } from './helpers.ts';
 
 const contract = fs.readFileSync(path.join(ROOT, 'docs', '04-mcp-tool-contract.md'), 'utf8');
 const contractTools = new Set([...contract.matchAll(/^\|\s*`([a-z_]+)`\s*\|/gm)].map((m) => m[1]));
-const ALLOWED = ['app_map', 'ask_human', 'batch', 'browser', 'cleanup', 'click', 'clipboard', 'close_window', 'drag', 'elevated_helper', 'find', 'focus_window', 'launch_app', 'list_skills', 'list_windows', 'mouse', 'observe', 'ocr', 'press_keys', 'read_text', 'run_skill', 'screenshot', 'scroll', 'set_value', 'status', 'type', 'wait_for', 'wait_for_human', 'window_bounds'];
+const ALLOWED = ['app_map', 'ask_human', 'batch', 'browser', 'cleanup', 'click', 'clipboard', 'close_window', 'drag', 'elevated_helper', 'find', 'focus_window', 'frame_diff', 'launch_app', 'list_skills', 'list_windows', 'mouse', 'observe', 'ocr', 'pen', 'press_keys', 'read_text', 'record_session', 'run_skill', 'screenshot', 'scroll', 'set_value', 'status', 'touch', 'type', 'wait_for', 'wait_for_human', 'window_bounds'];
 
 test('tools/list exposes exactly the built tools (M1-M6, P2-M1..M3)', async () => {
   const mcp = new McpClient({});
@@ -37,7 +37,7 @@ test('unknown tool and unexpected arguments are INVALID_ARGS (no core needed)', 
   const mcp = new McpClient({ XTRAOS_PIPE: '\\\\.\\pipe\\xtraos-none', XTRAOS_TOKEN: 'x' });
   try {
     await mcp.init();
-    const a = await mcp.callTool('record_session', {});
+    const a = await mcp.callTool('no_such_tool', {});
     assert.ok(a.isError && a.text.startsWith('ERROR INVALID_ARGS'), a.text);
     const b = await mcp.callTool('click', { x: 1, y: 1, bogus: 1 });
     assert.ok(b.isError && b.text.startsWith('ERROR INVALID_ARGS'), b.text);

@@ -86,6 +86,12 @@ needs an XtraDevPilot build that includes the bridge security fix.
 
 ## Phase 3 — Reach
 
+**P2-M8 rules editor + XtraOS windows off limits; P3-M1 `frame_diff`; P3-M2 `record_session`;
+P3-M3 `touch`/`pen`: built** (ADRs 0036, 0037). The automated Phase 3 gate passes 14/14. The
+real touch/pen tests run in the hands-off session.
+Open: P3-M4 Agent Workspace / Windows Sandbox (needs a Windows feature enabled, owner);
+P3-M5 macOS (needs a Mac).
+
 Game/canvas helpers (frame diff, detector hooks), touch & pen injection (`InjectSyntheticPointerInput`),
 multi-finger gestures, recording/replay, macOS platform (CGEvent, AX, ScreenCaptureKit).
 

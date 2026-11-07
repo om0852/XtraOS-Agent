@@ -46,6 +46,14 @@ Localised action words (ADR 0034): the Send / Buy / Delete name rules also recog
 Hindi (Devanagari and common romanised forms), Marathi, Spanish, French, German and
 Portuguese labels. As in English, the whole name must be the word.
 
+XtraOS's own windows (ADR 0036): every `xtraos-core.exe` window (rules editor, admin helper,
+other cores) is off limits to the agent, and the user cannot loosen this. The rules editor
+writes `policy.json`; the core still asks the user before applying it.
+Session recording (ADR 0036): records only the agent's own successful actions, never the
+user's input. Password targets are never recorded; typed text becomes an editable argument.
+Touch / pen (ADR 0036): the same polite rules as the mouse. Multi-finger Windows gestures ask
+first.
+
 Elevated admin helper (ADR 0030): opt-in per session, started only through a UAC prompt
 (nothing elevated is installed). One pipe connection, only from the core that started it
 (PID-checked both ways, squatting refused, same binary). The helper asks the user in its own

@@ -175,7 +175,11 @@ const SETTINGS_PROCESSES: &[&str] = &[
 ];
 const SETTINGS_TITLES: &[&str] = &["control panel", "registry editor", "group policy"];
 /// Password managers + Windows security/credential UIs (docs/05 default deny list).
+/// XtraOS's own processes (viewer/editor, admin helper, other cores): never driven by the
+/// agent, whatever policy.json says (ADR 0036).
+pub const XTRAOS_PROCESS: &str = "xtraos-core.exe";
 const DENY_PROCESSES: &[&str] = &[
+    XTRAOS_PROCESS,
     "1password.exe",
     "keepass.exe",
     "keepassxc.exe",
@@ -412,10 +416,13 @@ pub fn is_messaging(p: &str, title: &str) -> bool {
 
 fn method_class(m: &str) -> Class {
     match m {
-        "observe" | "find" | "read_text" | "screenshot" | "list_windows" | "ocr" | "wait_for" => {
-            Class::Observe
-        }
-        m if m.starts_with("run_skill:") || m == "app_map" || m == "elevated_helper" => {
+        "observe" | "find" | "read_text" | "screenshot" | "list_windows" | "ocr" | "wait_for"
+        | "frame_diff" => Class::Observe,
+        m if m.starts_with("run_skill:")
+            || m == "app_map"
+            || m == "elevated_helper"
+            || m == "record_session" =>
+        {
             Class::Observe
         }
         m if m.starts_with("browser:") => {
@@ -583,6 +590,11 @@ impl Policy {
         if self.classes.get(&Class::CredentialEntry) != Some(&Decision::Deny) {
             self.warnings.push("credential_entry is always deny".into());
             self.classes.insert(Class::CredentialEntry, Decision::Deny);
+        }
+        if self.apps.get(XTRAOS_PROCESS) != Some(&Decision::Deny) {
+            self.warnings
+                .push("xtraos-core.exe windows are always off limits".into());
+            self.apps.insert(XTRAOS_PROCESS.into(), Decision::Deny);
         }
         if self.classes.get(&Class::Purchase) == Some(&Decision::Allow) {
             self.warnings.push("purchase can be at most confirm".into());

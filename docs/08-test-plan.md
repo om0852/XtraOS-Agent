@@ -220,6 +220,16 @@ A fake bridge in the test process runs every row except LIVE, so no browser and 
 | P2-LO-06 | (bench, hands off) `type` 50 chars into the Run box | recorded next to the testbed row |
 | P2-LO-07 | (hands off) 30 s input census | counts per source; foreign injected input = 0 expected |
 
+### P2-M8 + Phase 3 (ADR 0036)
+| ID | Test case | Expected |
+|---|---|---|
+| P2-ED-01 | Rules editor: set delete = refuse, Save | policy.json updated, unknown keys kept, status says the core will ask |
+| P2-ED-03 | Agent observe / find / close on the editor window | `BLOCKED_BY_POLICY` (xtraos-core.exe always off limits) |
+| P3-FD-01..03 | frame_diff on the testbed: baseline, still, text change, `wait_ms` for a delayed change | no change; a region over the text field; returns when the change comes |
+| P3-RR-01..04 | record click + set_value; replay after moving the window; replay with an argument; window gone; password attempt; empty recording | replays; argument used; `WINDOW_NOT_FOUND`; password never stored; nothing saved |
+| P3-TP-04 | 3-finger swipe | asks (system_settings); Deny → nothing injected |
+| P3-TP-01..03 | (hands off) touch tap on a button; pen stroke on the pad; kill switch during a long press | click counted; path recorded; `STOPPED`, contact lifted |
+
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).
 2. Fix → add/extend a test that would have caught it → re-run the full gate.

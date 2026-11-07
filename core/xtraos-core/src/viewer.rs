@@ -1,7 +1,9 @@
-//! Rules and activity viewer (P2-M7, ADR 0034): `xtraos-core.exe --viewer`, also opened from
-//! the tray menu. Read only: it shows the effective policy and the latest action-log entries,
-//! and offers to open policy.json (changes still need the user's approval in the core, ADR
-//! 0026) and the log folder. It never writes anything and the log holds no secrets.
+//! Rules and activity window (P2-M7/M8, ADR 0034/0036): `xtraos-core.exe --viewer`, also
+//! opened from the tray menu. It shows the effective policy and the latest action-log entries
+//! (the log holds no secrets) and lets the USER edit the rules. Saving writes policy.json;
+//! the core applies it only after the user approves the listed changes in the core's own
+//! dialog (ADR 0026), and hard rules still win. The agent cannot drive this window: every
+//! xtraos-core.exe window is off limits to it (ADR 0036).
 use std::path::{Path, PathBuf};
 
 use windows::core::{w, PCWSTR};
@@ -21,6 +23,109 @@ const ID_TEXT: i32 = 10;
 const ID_REFRESH: i32 = 11;
 const ID_OPEN_POLICY: i32 = 12;
 const ID_OPEN_LOGS: i32 = 13;
+const ID_CLASS_BASE: i32 = 100;
+const ID_APPS: i32 = 200;
+const ID_RATE: i32 = 201;
+const ID_SAVE: i32 = 202;
+const ID_STATUS: i32 = 203;
+const EDITOR_W: i32 = 420;
+const ROW_H: i32 = 27;
+
+// ---------------------------------------------------------------------------------------------
+// Editing (pure, unit-tested)
+
+const CHOICES: [(&str, Decision); 3] = [
+    ("allow", Decision::Allow),
+    ("ask first", Decision::Confirm),
+    ("refuse", Decision::Deny),
+];
+
+fn decision_word(d: Decision) -> &'static str {
+    match d {
+        Decision::Allow => "allow",
+        Decision::Confirm => "confirm",
+        Decision::Deny => "deny",
+    }
+}
+
+/// App rules as editable lines `process.exe = allow|confirm|deny`, sorted.
+pub fn apps_to_text(p: &Policy) -> String {
+    let mut apps: Vec<_> = p.apps.iter().collect();
+    apps.sort_by(|a, b| a.0.cmp(b.0));
+    apps.iter()
+        .map(|(a, d)| format!("{a} = {}", decision_word(**d)))
+        .collect::<Vec<_>>()
+        .join("\r\n")
+}
+
+/// Parses the app-rule lines; blank lines and `#` comments are skipped.
+pub fn parse_apps(text: &str) -> Result<Vec<(String, Decision)>, String> {
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let l = line.trim();
+        if l.is_empty() || l.starts_with('#') {
+            continue;
+        }
+        let (a, d) = l
+            .split_once('=')
+            .ok_or_else(|| format!("line {}: use process.exe = allow|confirm|deny", i + 1))?;
+        let a = a.trim().to_lowercase();
+        if a.is_empty() || a.contains(['\\', '/', ' ']) || !a.ends_with(".exe") {
+            return Err(format!(
+                "line {}: '{a}' is not a process name like app.exe",
+                i + 1
+            ));
+        }
+        let d = Decision::parse(d.trim())
+            .ok_or_else(|| format!("line {}: decision must be allow, confirm or deny", i + 1))?;
+        out.push((a, d));
+    }
+    Ok(out)
+}
+
+/// New policy.json text: `existing` with classes, apps and rate replaced; other keys kept.
+pub fn updated_json(
+    existing: Option<&str>,
+    classes: &[(Class, Decision)],
+    apps: &[(String, Decision)],
+    rate: u32,
+) -> Result<String, String> {
+    if classes
+        .iter()
+        .any(|(c, d)| *c == Class::CredentialEntry && *d != Decision::Deny)
+    {
+        return Err("credential_entry is always refused (the user types passwords)".into());
+    }
+    if classes
+        .iter()
+        .any(|(c, d)| *c == Class::Purchase && *d == Decision::Allow)
+    {
+        return Err("purchase can be at most 'ask first'".into());
+    }
+    if !(10..=10_000).contains(&rate) {
+        return Err("actions per minute must be 10..10000".into());
+    }
+    let mut v: serde_json::Value = match existing {
+        Some(t) if !t.trim().is_empty() => serde_json::from_str(t)
+            .map_err(|e| format!("policy.json is not valid JSON ({e}); fix or delete it first"))?,
+        _ => serde_json::json!({}),
+    };
+    let o = v
+        .as_object_mut()
+        .ok_or("policy.json must contain a JSON object")?;
+    let mut cs = serde_json::Map::new();
+    for (c, d) in classes {
+        cs.insert(c.name().into(), serde_json::json!(decision_word(*d)));
+    }
+    let mut ap = serde_json::Map::new();
+    for (a, d) in apps {
+        ap.insert(a.clone(), serde_json::json!(decision_word(*d)));
+    }
+    o.insert("classes".into(), serde_json::Value::Object(cs));
+    o.insert("apps".into(), serde_json::Value::Object(ap));
+    o.insert("rate_per_minute".into(), serde_json::json!(rate));
+    serde_json::to_string_pretty(&v).map_err(|e| e.to_string())
+}
 
 fn decision(d: Option<&Decision>) -> &'static str {
     match d {
@@ -179,6 +284,72 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+unsafe fn ctl_text(h: WHWND, id: i32) -> String {
+    let Ok(c) = GetDlgItem(Some(h), id) else {
+        return String::new();
+    };
+    let n = GetWindowTextLengthW(c);
+    let mut buf = vec![0u16; n as usize + 1];
+    let got = GetWindowTextW(c, &mut buf);
+    String::from_utf16_lossy(&buf[..got as usize])
+}
+
+unsafe fn set_ctl_text(h: WHWND, id: i32, s: &str) {
+    if let Ok(c) = GetDlgItem(Some(h), id) {
+        let t = wide(s);
+        let _ = SetWindowTextW(c, PCWSTR(t.as_ptr()));
+    }
+}
+
+/// Puts the current policy into the editor controls.
+unsafe fn fill_editor(h: WHWND) {
+    let p = Policy::load(&crate::pairing::data_dir().join("policy.json"));
+    for (i, c) in Class::ALL.iter().enumerate() {
+        let d = p.classes.get(c).copied().unwrap_or(Decision::Confirm);
+        let idx = CHOICES.iter().position(|(_, x)| *x == d).unwrap_or(1);
+        if let Ok(cb) = GetDlgItem(Some(h), ID_CLASS_BASE + i as i32) {
+            SendMessageW(cb, CB_SETCURSEL, Some(WPARAM(idx)), Some(LPARAM(0)));
+        }
+    }
+    set_ctl_text(h, ID_APPS, &apps_to_text(&p));
+    set_ctl_text(h, ID_RATE, &p.rate_per_minute.to_string());
+}
+
+/// Save: validate, merge into policy.json, report. The core asks the user before applying.
+unsafe fn save(h: WHWND) {
+    let mut classes = Vec::new();
+    for (i, c) in Class::ALL.iter().enumerate() {
+        let Ok(cb) = GetDlgItem(Some(h), ID_CLASS_BASE + i as i32) else {
+            continue;
+        };
+        let sel = SendMessageW(cb, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0;
+        if let Some((_, d)) = CHOICES.get(sel.max(0) as usize) {
+            classes.push((*c, *d));
+        }
+    }
+    let status = match parse_apps(&ctl_text(h, ID_APPS)).and_then(|apps| {
+        let rate = ctl_text(h, ID_RATE)
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| "actions per minute must be a number".to_string())?;
+        let path = crate::pairing::data_dir().join("policy.json");
+        let existing = std::fs::read_to_string(&path).ok();
+        let text = updated_json(existing.as_deref(), &classes, &apps, rate)?;
+        if existing.as_deref() == Some(text.as_str()) {
+            return Ok("No changes.".to_string());
+        }
+        std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&path, text).map_err(|e| format!("could not save: {e}"))?;
+        Ok("Saved. Before its next action, XtraOS shows you the changes and applies them only if you approve.".to_string())
+    }) {
+        Ok(s) => s,
+        Err(e) => format!("Not saved: {e}"),
+    };
+    set_ctl_text(h, ID_STATUS, &status);
+    set_report(h);
+}
+
 unsafe fn set_report(h: WHWND) {
     let text = wide(&report(&crate::pairing::data_dir()));
     if let Ok(edit) = GetDlgItem(Some(h), ID_TEXT) {
@@ -192,7 +363,7 @@ unsafe fn layout(h: WHWND) {
     let (w, ht) = (r.right - r.left, r.bottom - r.top);
     let bar = 40;
     if let Ok(e) = GetDlgItem(Some(h), ID_TEXT) {
-        let _ = MoveWindow(e, 8, 8, w - 16, ht - bar - 16, true);
+        let _ = MoveWindow(e, EDITOR_W + 16, 8, w - EDITOR_W - 24, ht - bar - 16, true);
     }
     for (i, id) in [ID_REFRESH, ID_OPEN_POLICY, ID_OPEN_LOGS]
         .iter()
@@ -267,6 +438,132 @@ unsafe extern "system" fn proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
                 );
                 SendMessageW(e, 0x00C5, Some(WPARAM(0)), Some(LPARAM(0))); // EM_LIMITTEXT: no limit
             }
+            // Editor: one list per class, app rules, rate, Save.
+            let gui = windows::Win32::Graphics::Gdi::GetStockObject(
+                windows::Win32::Graphics::Gdi::DEFAULT_GUI_FONT,
+            );
+            let child = |class: PCWSTR, text: &str, style: WINDOW_STYLE, x, y, cw, ch, id: i32| {
+                let t = wide(text);
+                let c = CreateWindowExW(
+                    if class == w!("EDIT") {
+                        WS_EX_CLIENTEDGE
+                    } else {
+                        WINDOW_EX_STYLE(0)
+                    },
+                    class,
+                    PCWSTR(t.as_ptr()),
+                    WS_CHILD | WS_VISIBLE | style,
+                    x,
+                    y,
+                    cw,
+                    ch,
+                    Some(h),
+                    Some(HMENU(id as _)),
+                    Some(inst.into()),
+                    None,
+                );
+                if let Ok(c) = c {
+                    SendMessageW(c, WM_SETFONT, Some(WPARAM(gui.0 as usize)), Some(LPARAM(1)));
+                }
+                c
+            };
+            for (i, c) in Class::ALL.iter().enumerate() {
+                let y = 8 + i as i32 * ROW_H;
+                let _ = child(
+                    w!("STATIC"),
+                    c.name(),
+                    WINDOW_STYLE(0),
+                    8,
+                    y + 3,
+                    170,
+                    20,
+                    -1,
+                );
+                if let Ok(cb) = child(
+                    w!("COMBOBOX"),
+                    "",
+                    WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+                    180,
+                    y,
+                    230,
+                    200,
+                    ID_CLASS_BASE + i as i32,
+                ) {
+                    for (label, _) in CHOICES {
+                        let t = wide(label);
+                        SendMessageW(
+                            cb,
+                            CB_ADDSTRING,
+                            Some(WPARAM(0)),
+                            Some(LPARAM(t.as_ptr() as isize)),
+                        );
+                    }
+                }
+            }
+            let y0 = 8 + Class::ALL.len() as i32 * ROW_H + 6;
+            let _ = child(
+                w!("STATIC"),
+                "Apps (one per line: process.exe = allow / confirm / deny)",
+                WINDOW_STYLE(0),
+                8,
+                y0,
+                402,
+                18,
+                -1,
+            );
+            let _ = child(
+                w!("EDIT"),
+                "",
+                WS_VSCROLL
+                    | WS_TABSTOP
+                    | WINDOW_STYLE((ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN) as u32),
+                8,
+                y0 + 20,
+                402,
+                150,
+                ID_APPS,
+            );
+            let _ = child(
+                w!("STATIC"),
+                "Actions per minute",
+                WINDOW_STYLE(0),
+                8,
+                y0 + 182,
+                170,
+                20,
+                -1,
+            );
+            let _ = child(
+                w!("EDIT"),
+                "",
+                WS_TABSTOP | WINDOW_STYLE(ES_NUMBER as u32),
+                180,
+                y0 + 179,
+                80,
+                22,
+                ID_RATE,
+            );
+            let _ = child(
+                w!("BUTTON"),
+                "Save rules",
+                WS_TABSTOP,
+                8,
+                y0 + 210,
+                160,
+                30,
+                ID_SAVE,
+            );
+            let _ = child(
+                w!("STATIC"),
+                "",
+                WINDOW_STYLE(0),
+                8,
+                y0 + 246,
+                402,
+                56,
+                ID_STATUS,
+            );
+            fill_editor(h);
             for (id, label) in [
                 (ID_REFRESH, w!("Refresh")),
                 (ID_OPEN_POLICY, w!("Open policy.json")),
@@ -298,7 +595,11 @@ unsafe extern "system" fn proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         WM_COMMAND => {
             let dir = crate::pairing::data_dir();
             match (wp.0 & 0xffff) as i32 {
-                ID_REFRESH => set_report(h),
+                ID_REFRESH => {
+                    fill_editor(h);
+                    set_report(h);
+                }
+                ID_SAVE => save(h),
                 ID_OPEN_POLICY => {
                     // Notepad on the file (it offers to create it if missing). Saving it
                     // changes nothing until the user approves the change in the core.
@@ -353,8 +654,8 @@ pub fn run_viewer() -> i32 {
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            1000,
-            760,
+            1240,
+            820,
             None,
             None,
             Some(inst.into()),
@@ -408,5 +709,49 @@ mod tests {
         let empty = report(&d.join("nope"));
         assert!(empty.contains("not created yet") && empty.contains("nothing logged yet"));
         let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn editor_merges_and_refuses_hard_rule_changes() {
+        let apps = parse_apps("# mine\r\nNotepad.exe = confirm\r\n\r\nslack.exe=deny").unwrap();
+        assert_eq!(
+            apps,
+            vec![
+                ("notepad.exe".into(), Decision::Confirm),
+                ("slack.exe".into(), Decision::Deny)
+            ]
+        );
+        assert!(parse_apps("notepad = allow").is_err(), "needs .exe");
+        assert!(parse_apps("C:\\x\\a.exe = allow").is_err(), "no paths");
+        assert!(parse_apps("a.exe = maybe").is_err());
+        let classes = vec![
+            (Class::Delete, Decision::Deny),
+            (Class::CredentialEntry, Decision::Deny),
+        ];
+        let t = updated_json(
+            Some(r#"{"note": "kept", "classes": {"input": "allow"}}"#),
+            &classes,
+            &apps,
+            300,
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+        assert_eq!(v["note"], "kept", "unknown keys stay");
+        assert_eq!(v["classes"]["delete"], "deny");
+        assert_eq!(v["apps"]["slack.exe"], "deny");
+        assert_eq!(v["rate_per_minute"], 300);
+        let p = Policy::from_json(&t);
+        assert_eq!(p.classes.get(&Class::Delete), Some(&Decision::Deny));
+        assert!(
+            updated_json(None, &[(Class::CredentialEntry, Decision::Allow)], &[], 300).is_err()
+        );
+        assert!(updated_json(None, &[(Class::Purchase, Decision::Allow)], &[], 300).is_err());
+        assert!(updated_json(None, &[], &[], 5).is_err());
+        assert!(
+            updated_json(Some("{broken"), &[], &[], 300).is_err(),
+            "never overwrite a broken file"
+        );
+        let round = apps_to_text(&Policy::from_json(&t));
+        assert!(round.contains("slack.exe = deny"), "{round}");
     }
 }

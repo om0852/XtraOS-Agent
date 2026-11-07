@@ -261,6 +261,12 @@ fn send(inputs: &[INPUT]) -> Result<(), ActError> {
     send_always(inputs)
 }
 
+/// Marks input the core is about to inject outside SendInput (touch/pen, P3-M3), so the
+/// hooks attribute it to the core, not to the user.
+pub fn mark_injected() {
+    LAST_INJECT.store(unsafe { GetTickCount() }.max(1), Ordering::Relaxed);
+}
+
 /// True while/just after the core injects input (the hooks then attribute injected events to
 /// the core, not to the user or another program).
 pub fn recently_injected() -> bool {

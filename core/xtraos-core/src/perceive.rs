@@ -619,6 +619,7 @@ struct Entry {
     password: bool,
     name: String,
     virt: bool,
+    role: &'static str,
 }
 
 #[derive(Default)]
@@ -671,6 +672,7 @@ impl Table {
                 password: n.info.password,
                 name: n.info.name.clone(),
                 virt: n.virt,
+                role: n.info.role,
             },
         );
         r
@@ -728,6 +730,42 @@ pub fn ref_facts(v: &Value) -> Option<(HWND, String, bool)> {
             .get(&n)
             .map(|e| (e.win as HWND, e.name.clone(), e.password))
     })
+}
+
+/// Window, role, name and password flag of a ref (record_session locators, ADR 0036).
+pub fn ref_locator(v: &Value) -> Option<(HWND, &'static str, String, bool)> {
+    let n = parse_elem_ref(v)?;
+    with_table(|t| {
+        t.refs
+            .get(&n)
+            .map(|e| (e.win as HWND, e.role, e.name.clone(), e.password))
+    })
+}
+
+/// A ref for the element with exactly this role and name in a window (replay of recorded
+/// steps). Visible elements win over off-screen ones; none → ELEMENT_NOT_FOUND.
+pub fn locate_element(h: HWND, role: &str, name: &str) -> Result<String, ActError> {
+    let nodes = snapshot(h, false)?;
+    let mut hits: Vec<&Node> = nodes
+        .iter()
+        .skip(1)
+        .filter(|n| n.info.role == role && n.info.name == name)
+        .collect();
+    hits.sort_by_key(|n| n.info.offscreen || (n.info.rect.2 <= 0 && n.info.rect.3 <= 0));
+    let n = hits.first().ok_or_else(|| {
+        err(
+            "ELEMENT_NOT_FOUND",
+            format!("no {role} \"{name}\" in {}", winmgr::window_ref(h)),
+            "The recorded element is not there now (different screen or state).",
+        )
+    })?;
+    let win = h as usize;
+    let r = with_table(|t| {
+        let r = t.ref_for(win, n);
+        t.touch(win);
+        r
+    });
+    Ok(format!("e{r}"))
 }
 
 /// Name and password flag of the element under a screen point (policy for real clicks).
@@ -869,6 +907,7 @@ pub const METHODS: &[&str] = &[
     "screenshot",
     "wait_for",
     "ocr",
+    "frame_diff",
 ];
 
 pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
@@ -885,6 +924,7 @@ pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
         "screenshot" => crate::capture::screenshot(p),
         "wait_for" => wait_for(p),
         "ocr" => crate::ocr::ocr(p),
+        "frame_diff" => crate::framediff::frame_diff(p),
         m => Err(bad(format!("'{m}' is not a perception method"))),
     }
 }

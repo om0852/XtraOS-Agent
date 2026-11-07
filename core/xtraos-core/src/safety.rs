@@ -471,7 +471,10 @@ pub fn gather_targets(method: &str, p: &Value) -> (Facts, String, Vec<HWND>) {
             hwnds.push(h);
         }
     }
-    let targets_window = matches!(method, "observe" | "find" | "read_text" | "screenshot");
+    let targets_window = matches!(
+        method,
+        "observe" | "find" | "read_text" | "screenshot" | "ocr" | "frame_diff"
+    );
     if targets_window
         && p.get("window").is_none_or(Value::is_null)
         && p.get("ref").is_none_or(Value::is_null)
@@ -574,6 +577,30 @@ pub fn gather_targets(method: &str, p: &Value) -> (Facts, String, Vec<HWND>) {
                 .map(|t| t.chars().count())
                 .unwrap_or(0);
             what = format!("{what} ({n} characters)");
+        }
+        "touch" | "pen" => {
+            let first = p["points"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(Value::as_array)
+                .and_then(|a| {
+                    Some(POINT {
+                        x: a.first()?.as_i64()? as i32,
+                        y: a.get(1)?.as_i64()? as i32,
+                    })
+                });
+            if let Some(pt) = first {
+                let h = winmgr::root_at(pt);
+                if !h.is_null() {
+                    hwnds.push(h);
+                }
+            }
+            let fingers = p["fingers"].as_u64().unwrap_or(1);
+            if method == "touch" && p["action"] == "swipe" && fingers >= 3 {
+                // 3-4 finger swipes are Windows gestures (Task View, switch desktops).
+                f.skill_class = Some(policy::Class::SystemSettings);
+            }
+            what = format!("{method} {}", p["action"].as_str().unwrap_or("tap"));
         }
         "elevated_helper" => {
             f.elevated = p.get("op").and_then(Value::as_str) == Some("start");
@@ -968,7 +995,12 @@ pub fn activity_end() {
 
 /// Shows "XtraOS Agent · <what>" on the overlay banner (never typed text).
 pub fn activity(what: &str) {
-    *OVERLAY_TEXT.lock().unwrap_or_else(|e| e.into_inner()) = perceive::clip(what, 90);
+    let what = if crate::recorder::active() {
+        format!("● REC · {what}")
+    } else {
+        what.to_string()
+    };
+    *OVERLAY_TEXT.lock().unwrap_or_else(|e| e.into_inner()) = perceive::clip(&what, 90);
     post(WM_APP_ACTIVITY, 0);
 }
 

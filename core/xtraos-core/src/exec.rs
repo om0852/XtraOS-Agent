@@ -21,6 +21,9 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, ActError> {
     if method == "elevated_helper" {
         return crate::helper::run(p);
     }
+    if method == "record_session" {
+        return crate::recorder::run(p);
+    }
     if crate::helper::owns_refs(p) {
         return crate::helper::forward(method, p);
     }
@@ -48,6 +51,8 @@ pub fn dispatch_local(method: &str, p: &Value) -> Result<Value, ActError> {
         input::run(method, p)
     } else if method == "browser" {
         crate::browser::run(p)
+    } else if method == "touch" || method == "pen" {
+        crate::touch::run(method, p)
     } else if method == "app_map" {
         crate::appmap::run(p)
     } else if method == "list_skills" {
@@ -68,6 +73,9 @@ pub fn dispatch_local(method: &str, p: &Value) -> Result<Value, ActError> {
 /// Tools allowed inside a batch (ADR 0022). No nesting, no human questions, no images.
 pub const BATCH_TOOLS: &[&str] = &[
     "browser",
+    "touch",
+    "pen",
+    "frame_diff",
     "click",
     "type",
     "press_keys",
@@ -143,9 +151,12 @@ pub fn batch(p: &Value, log: &mut dyn FnMut(StepLog)) -> Result<Value, ActError>
         }
         let t0 = std::time::Instant::now();
         let mut policy = None;
-        let r = safety::authorize(tool, args).and_then(|a| {
-            policy = Some(a.decision);
-            dispatch(tool, args)
+        // Recorded skills carry locators instead of refs (ADR 0036): resolve them now.
+        let r = crate::recorder::resolve(args).and_then(|args| {
+            safety::authorize(tool, &args).and_then(|a| {
+                policy = Some(a.decision);
+                dispatch(tool, &args)
+            })
         });
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         match r {

@@ -515,6 +515,89 @@ export const TOOLS: ToolDef[] = [
     run: forward('close_window', (r) => `ok closed ${r.ref}`),
   },
   {
+    name: 'touch',
+    description:
+      'Real touch input (screen pixels) for touch-first apps: tap, long_press, drag (to_x/to_y), pinch (scale < 1 in, ' +
+      '> 1 out; distance), swipe (to_x/to_y, fingers 1-4). Waits until the user is idle (idle_ms). 3-4 finger swipes ' +
+      'are Windows gestures and ask the user first. Prefer click/scroll with refs when they work.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['tap', 'long_press', 'drag', 'pinch', 'swipe'] },
+        x: X, y: Y,
+        to_x: { type: 'integer' }, to_y: { type: 'integer' },
+        fingers: { type: 'integer', minimum: 1, maximum: 4 },
+        scale: { type: 'number', minimum: 0.1, maximum: 10 },
+        distance: { type: 'integer', minimum: 20, maximum: 2000 },
+        duration_ms: { type: 'integer', minimum: 20, maximum: 10000 },
+        idle_ms: IDLE,
+      },
+      required: ['action', 'x', 'y'],
+      additionalProperties: false,
+    },
+    run: forward('touch', (r) => r.text),
+  },
+  {
+    name: 'pen',
+    description:
+      'Real pen input with pressure (drawing and handwriting apps): tap (x, y) or draw (points: [[x, y], [x, y, ' +
+      'pressure 0-1024], ...], up to 2000; pressure default 512). Waits until the user is idle.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['tap', 'draw'] },
+        x: { type: 'integer' }, y: { type: 'integer' },
+        points: { type: 'array', items: { type: 'array', items: { type: 'integer' }, minItems: 2, maxItems: 3 }, minItems: 2, maxItems: 2000 },
+        pressure: { type: 'integer', minimum: 0, maximum: 1024 },
+        idle_ms: IDLE,
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    run: forward('pen', (r) => r.text),
+  },
+  {
+    name: 'record_session',
+    description:
+      'Records your successful actions as a reusable skill. op=start (name: letters/digits/-_.), then act as usual, ' +
+      'then op=stop saves skills/<name>.json (overwrite: true to replace); replay with run_skill {name}. Refs, windows ' +
+      'and points are saved as locators (app + window title + element role/name, window-relative points) so replay ' +
+      'works after windows move; a missing window/element fails that step (never guesses). Typed text becomes an ' +
+      'argument (value1/text1…) you can change at replay. Password fields are never recorded. Max 50 steps, 30 min. ' +
+      'op=status / discard.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['start', 'stop', 'status', 'discard'] },
+        name: { type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$' },
+        overwrite: { type: 'boolean' },
+      },
+      required: ['op'],
+      additionalProperties: false,
+    },
+    run: forward('record_session', (r) => r.text),
+  },
+  {
+    name: 'frame_diff',
+    description:
+      'What changed in a window (default foreground) or screen region since the previous frame_diff on it — for ' +
+      'canvas apps, games and video where observe sees nothing. First call sets a baseline. Returns changed regions ' +
+      '(screen pixels, ≤ 16, largest first) and changed_pct; no pixels (use screenshot/ocr on a region for those). ' +
+      'wait_ms waits until at least min_pct (default 0.5) changes. Works when the window is covered, not minimised.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        window: WINDOW_REQ,
+        region: { type: 'object', properties: { x: { type: 'integer' }, y: { type: 'integer' }, w: { type: 'integer' }, h: { type: 'integer' } }, required: ['x', 'y', 'w', 'h'], additionalProperties: false },
+        wait_ms: { type: 'integer', minimum: 0, maximum: 60000 },
+        min_pct: { type: 'number', minimum: 0, maximum: 100 },
+        reset: { type: 'boolean', description: 'Start a new baseline' },
+      },
+      additionalProperties: false,
+    },
+    run: forward('frame_diff', (r) => r.text),
+  },
+  {
     name: 'browser',
     description:
       'Web pages in Chrome via the XtraDevPilot extension: precise CSS-selector / text targeting where UIA is weak. ' +

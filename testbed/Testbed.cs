@@ -58,9 +58,15 @@ static class Program
         {
             // Commands are plain lowercase words; keep only a-z so a UTF-8 BOM (which some
             // writers prepend, and the console decodes as stray characters) cannot break them.
-            var sbCmd = new StringBuilder();
-            foreach (char ch in line) if (ch >= 'a' && ch <= 'z') sbCmd.Append(ch);
-            string cmd = sbCmd.ToString();
+            // The command word is the first run of a-z (anything before it, e.g. a BOM, is
+            // dropped); "settext"/"latertext" keep their arguments after one space.
+            int start = 0;
+            while (start < line.Length && !(line[start] >= 'a' && line[start] <= 'z')) start++;
+            int end = start;
+            while (end < line.Length && line[end] >= 'a' && line[end] <= 'z') end++;
+            string cmd = line.Substring(start, end - start);
+            if (end < line.Length && line[end] == ' ' && (cmd == "settext" || cmd == "latertext"))
+                cmd = cmd + line.Substring(end);
             string reply = (string)form.Invoke(new Func<string>(() => target.Command(cmd)));
             Out(reply);
             if (cmd == "quit") break;
@@ -167,6 +173,18 @@ class Testbed : Form, ICommandable
 
     public string Command(string cmd)
     {
+        // "settext <text>": change the text field now; "latertext <ms> <text>": change it after
+        // a delay (frame_diff wait tests, P3-M1).
+        if (cmd.StartsWith("settext ")) { text.Text = cmd.Substring(8); return "{\"ok\":true}"; }
+        if (cmd.StartsWith("latertext "))
+        {
+            var parts = cmd.Split(new[] { ' ' }, 3);
+            int ms = int.Parse(parts[1]);
+            var t = new System.Windows.Forms.Timer { Interval = Math.Max(1, ms) };
+            t.Tick += (o, e) => { t.Stop(); text.Text = parts.Length > 2 ? parts[2] : ""; t.Dispose(); };
+            t.Start();
+            return "{\"ok\":true}";
+        }
         switch (cmd)
         {
             case "rects": return Rects();

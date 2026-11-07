@@ -182,8 +182,26 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
                             crate::skills::run(&params, &mut logger)
                         }
                     } else {
-                        crate::exec::dispatch(&m, &params)
+                        let pending = crate::recorder::prepare(&m, &params);
+                        let r = crate::exec::dispatch(&m, &params);
+                        if let (Ok(_), Some(step)) = (&r, pending) {
+                            crate::recorder::commit(step);
+                        }
+                        r
                     };
+                    if m == "batch" {
+                        // Record a successful batch as its individual steps.
+                        if let Ok(v) = &r {
+                            if v["ok"] == true {
+                                for s in params["steps"].as_array().into_iter().flatten() {
+                                    let tool = s["tool"].as_str().unwrap_or("");
+                                    if let Some(step) = crate::recorder::prepare(tool, &s["args"]) {
+                                        crate::recorder::commit(step);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Ok::<_, input::ActError>((r, approval))
                 })
                 .await;

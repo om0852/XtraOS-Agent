@@ -16,7 +16,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Methods from docs/04-mcp-tool-contract.md that exist on paper but not yet in the core.
-const PLANNED_METHODS: &[&str] = &["record_session"];
+const PLANNED_METHODS: &[&str] = &["agent_workspace"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
@@ -230,7 +230,15 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
             || crate::safety::METHODS.contains(&m)
             || matches!(
                 m,
-                "batch" | "app_map" | "list_skills" | "run_skill" | "elevated_helper" | "browser"
+                "batch"
+                    | "app_map"
+                    | "list_skills"
+                    | "run_skill"
+                    | "elevated_helper"
+                    | "browser"
+                    | "record_session"
+                    | "touch"
+                    | "pen"
             ) =>
         {
             let params = if params.is_null() { json!({}) } else { params };
@@ -368,7 +376,7 @@ mod tests {
         );
         let (o, info) = handle_line(
             &mut conn,
-            r#"{"jsonrpc":"2.0","id":2,"method":"record_session","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"agent_workspace","params":{}}"#,
             &c,
         );
         assert_eq!(code(&o).as_deref(), Some("NOT_IMPLEMENTED"));

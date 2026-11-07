@@ -6,8 +6,8 @@ The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 
 > Status: **Phase 1 complete — Release 0.1 (unsigned developer preview)**, M1–M6 closed
 > (ADRs 0009–0020); **Phase 2: P2-M1 closed** (wait_for, batch, scoped observe; ADR 0023),
-> **P2-M2 closed** (OCR; ADR 0025), **P2-M3 closed** (app map, skills; ADR 0027), **P2-M4 built** (WhatsApp skill, resource discipline; ADR 0029), **P2-M5 built** (elevated admin helper; ADR 0031), **P2-M6 built** (browser bridge to XtraDevPilot; ADR 0033), **P2-M7 built** (Phase 2 leftovers; ADR 0035). The hands-off and UAC test runs are pending. Open: code signing and a fresh-machine test with Smart App Control on.
-> Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1`, `tests/phase2/p2m1-gate.ps1` … `p2m7-gate.ps1`
+> **P2-M2 closed** (OCR; ADR 0025), **P2-M3 closed** (app map, skills; ADR 0027), **P2-M4 built** (WhatsApp skill, resource discipline; ADR 0029), **P2-M5 built** (elevated admin helper; ADR 0031), **P2-M6 built** (browser bridge to XtraDevPilot; ADR 0033), **P2-M7 built** (Phase 2 leftovers; ADR 0035); **Phase 3: P2-M8 + P3-M1..M3 built** (rules editor, frame diff, session recording, touch/pen; ADR 0037). The hands-off and UAC test runs are pending. Open: code signing and a fresh-machine test with Smart App Control on.
+> Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1`, `tests/phase2/p2m1-gate.ps1` … `p2m7-gate.ps1`, `tests/phase3/p3-gate.ps1`
 > (`-Interactive` moves the mouse and types; keep hands off).
 
 ## Install (Release 0.1)
@@ -73,6 +73,10 @@ Recorded flows: [docs/flows](docs/flows/README.md) · Bench: [docs/bench/release
 | Web pages via the XtraDevPilot bridge (`browser`): selectors/text, same policy (messaging send asks, buy and password fields refused); no scripts or cookies | automated tests pass (fake bridge, ADR 0033); live check needs the token-enabled XtraDevPilot |
 | Long and virtualised lists: off-screen rows found, `find deep` reaches Explorer rows never drawn, a row click selects (never opens) | verified: P2-M7 automated tests (ADR 0035) |
 | Send/Buy/Delete safety words in Hindi, Marathi, Spanish, French, German, Portuguese; read-only "Rules and activity" viewer (tray) | verified: unit + viewer test (ADR 0035) |
+| Rules editor in the tray viewer (the core still asks before applying); every XtraOS window is off limits to the agent | verified: P2-ED tests (ADR 0037) |
+| `frame_diff`: what changed in a canvas/game window, or wait for a change | verified: P3-FD tests |
+| `record_session`: the agent's actions saved as a replayable skill with locators (works after windows move; typed text editable; passwords never recorded) | verified: P3-RR tests |
+| `touch` / `pen`: tap, long press, drag, pinch, multi-finger swipe, pen with pressure | built; Windows-gesture policy verified; real input tests pending (hands off) |
 | Admin windows (UIPI): opt-in `elevated_helper`, started through UAC for one session. It accepts only the core and asks you in its own elevated dialog for each admin window | automated tests pass (helper unelevated, ADR 0031); real UAC run pending |
 | Resource discipline: the agent marks the windows it opened, reuses them instead of opening duplicates, and `cleanup` closes only those; closing your windows asks first | verified: P2-M4 e2e (ADR 0029) |
 | Code-signed binaries (Smart App Control on) | not yet (owner decision, ADR 0019) |

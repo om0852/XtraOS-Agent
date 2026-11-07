@@ -220,7 +220,7 @@ async fn ipc04_malformed_and_unknown_requests_keep_core_running() {
         .unwrap();
     assert_eq!(code(&r), "INVALID_ARGS");
     let r = c
-        .call(json!({"jsonrpc":"2.0","id":6,"method":"record_session","params":{}}))
+        .call(json!({"jsonrpc":"2.0","id":6,"method":"agent_workspace","params":{}}))
         .await
         .unwrap();
     assert_eq!(
@@ -291,11 +291,9 @@ async fn log01_every_request_is_logged_without_secrets() {
     c.call(json!({"jsonrpc":"2.0","id":2,"method":"status"}))
         .await
         .unwrap();
-    c.call(
-        json!({"jsonrpc":"2.0","id":3,"method":"record_session","params":{"secret_param":"do-not-log"}}),
-    )
-    .await
-    .unwrap();
+    c.call(json!({"jsonrpc":"2.0","id":3,"method":"agent_workspace","params":{"secret_param":"do-not-log"}}))
+        .await
+        .unwrap();
     let mut bad = f.connect().await;
     bad.call(json!({"jsonrpc":"2.0","id":1,"method":"status"}))
         .await
@@ -323,7 +321,7 @@ async fn log01_every_request_is_logged_without_secrets() {
         .iter()
         .map(|e| e["method"].as_str().unwrap())
         .collect();
-    assert_eq!(methods, ["pair", "status", "record_session", "status"]);
+    assert_eq!(methods, ["pair", "status", "agent_workspace", "status"]);
     assert_eq!(entries[2]["code"], "NOT_IMPLEMENTED");
     assert_eq!(entries[3]["code"], "NOT_PAIRED");
     f.stop().await;

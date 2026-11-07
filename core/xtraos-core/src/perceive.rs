@@ -711,6 +711,22 @@ pub fn focused_is_password() -> bool {
     }
 }
 
+/// UTF-16 length of the focused field's value (None: no value, or a password field). Lets
+/// `type` return only once the app has really taken the text (M6 bench finding).
+pub fn focused_value_len() -> Option<usize> {
+    let u = uia().ok()?;
+    unsafe {
+        let el = u.a.GetFocusedElement().ok()?;
+        if el.CurrentIsPassword().map(|b| b.as_bool()).unwrap_or(true) {
+            return None;
+        }
+        let vp = el
+            .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            .ok()?;
+        vp.CurrentValue().ok().map(|b| b.len())
+    }
+}
+
 /// A live element behind a ref, verified to still be the same element.
 pub struct Target {
     el: El,
@@ -1076,17 +1092,27 @@ fn read_text(p: &Value) -> Result<Value, ActError> {
     } else {
         let h = target_window(p)?;
         let nodes = snapshot(h, false)?;
-        // Largest visible document/edit with a text or value pattern, else the visible texts.
+        // The largest visible element with a TextPattern (editors, documents, terminals — Windows
+        // Terminal exposes its buffer on a non-Document element, found in flow F6), else the
+        // largest document/edit with a value, else the visible texts.
+        let area = |n: &&Node| n.info.rect.2 as i64 * n.info.rect.3 as i64;
+        let usable = |n: &&Node| !n.info.password && !n.info.offscreen && n.info.rect.2 > 0;
         let best = nodes
             .iter()
             .skip(1)
-            .filter(|n| {
-                !n.info.password
-                    && !n.info.offscreen
-                    && (n.info.text || n.info.value.is_some())
-                    && matches!(n.info.role, "Document" | "Edit")
-            })
-            .max_by_key(|n| n.info.rect.2 as i64 * n.info.rect.3 as i64);
+            .filter(usable)
+            .filter(|n| n.info.text)
+            .max_by_key(area)
+            .or_else(|| {
+                nodes
+                    .iter()
+                    .skip(1)
+                    .filter(usable)
+                    .filter(|n| {
+                        n.info.value.is_some() && matches!(n.info.role, "Document" | "Edit")
+                    })
+                    .max_by_key(area)
+            });
         match best {
             Some(n) => element_text(&n.el.0).unwrap_or_default(),
             None => nodes

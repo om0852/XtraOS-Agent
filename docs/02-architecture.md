@@ -150,13 +150,14 @@ xtraos-agent/
   CLAUDE.md                 # rules
   docs/                     # spec, architecture, contract, plans, ADRs
   core/                     # Rust workspace: xtraos-core, xtraos-elevated, platform crates
-  mcp/                      # TypeScript MCP server
-  tray/                     # Tauri app
-  testbed/                  # WPF/WinForms + HTML test apps with known controls
+  mcp/                      # TypeScript MCP server (bundled to one file for releases)
+  testbed/                  # WinForms test app with known controls
   spikes/                   # throwaway experiments (results go to ADRs)
-  bench/                    # token + latency benchmarks
-  scripts/                  # build, sign, package
+  tests/                    # gates (phase0, phase1), flows recorder, bench
+  release/                  # build/sign/package, install/uninstall, install test (ADR 0019)
+  dist/                     # build output (ignored)
 ```
+Phase 1 has no separate tray app: the tray, overlay and dialogs live in the core (ADR 0017).
 
 ## 8. Tech stack (pin exact versions when added)
 

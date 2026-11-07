@@ -55,7 +55,7 @@ all real-input tools accept `idle_ms`. `drag` ends can be refs: `from_ref`, `to_
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
 | `click` | `x, y` or `ref`; `window?`; `button?` (left/right/middle), `clicks?` (1–3), `modifiers?` (ctrl/shift/alt/win) | ok | P1 (M2) |
-| `type` | `window` (required, must be foreground), `text` (≤ 10,000 chars, unicode), `submit?` | ok | P1 (M2) |
+| `type` | `window` (required, must be foreground), `text` (≤ 10,000 chars, unicode), `submit?` | ok; returns once the app has the text (M6: `settled`) | P1 (M2) |
 | `press_keys` | `window` (required, must be foreground), `keys[]` e.g. `["Ctrl+S"]` | ok | P1 (M2) |
 | `scroll` | `x, y` or `ref`, `window?`, `dx?`, `dy?` (notches; dy > 0 scrolls down) | ok | P1 (M2; ref M4) |
 | `drag` | `from_ref` or `from_x, from_y`; `to_ref` or `to_x, to_y`; `window?`, `to_window?`, `steps?`, `step_ms?`, `hold_ms?` | ok | P1 (M2; refs M4) |

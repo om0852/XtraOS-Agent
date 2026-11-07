@@ -41,8 +41,19 @@ fn is_valid_token(t: &str) -> bool {
 
 /// Reads the token (override: `XTRAOS_TOKEN`) or creates a new 256-bit one.
 pub fn load_or_create_token(dir: &Path) -> io::Result<String> {
+    // An override must be a full 256-bit token: an empty or short value would make pairing
+    // trivially guessable. Empty = not set.
     if let Ok(t) = std::env::var("XTRAOS_TOKEN") {
-        return Ok(t);
+        let t = t.trim().to_string();
+        if !t.is_empty() {
+            if !is_valid_token(&t) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "XTRAOS_TOKEN must be 64 hex characters (256 bits)",
+                ));
+            }
+            return Ok(t);
+        }
     }
     let path = dir.join(TOKEN_FILE);
     if let Ok(existing) = fs::read_to_string(&path) {

@@ -15,3 +15,7 @@
 - Localised policy name heuristics (Send/Buy/Delete in other languages) — ADR 0018, Phase 2
 - Tray policy editor + action-log viewer (separate app) — ADR 0017, Phase 2
 - Find the source of system input events seen during hands-off runs (ADR 0016 f4, ADR 0018 f1) — Phase 2
+- Code signing for releases: choose a licence + apply to SignPath Foundation, or an owner certificate (`build-release.ps1 -CertThumbprint`) — ADR 0019/0020
+- Fresh-machine install test incl. Smart App Control on (Windows Sandbox/VM) — ADR 0020
+- Flow F6 with real Claude Code once installed on the test PC — ADR 0020
+- `type` latency on more apps (fast fields vs the 150 ms budget) — ADR 0020, Phase 2

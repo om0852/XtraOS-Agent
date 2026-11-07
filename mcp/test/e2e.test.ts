@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { McpClient, startCore, stopProcess, testEnv } from './helpers.ts';
+import { CORE_EXE, McpClient, startCore, stopProcess, testEnv } from './helpers.ts';
 
 // P1-IPC-01 (end to end through MCP)
 test('status works end to end: MCP -> pipe -> core', async () => {
@@ -103,5 +103,27 @@ test('screenshot returns an image block; observe errors map to contract codes', 
     assert.ok(s.isError && s.text.startsWith('ERROR STALE_REF'), s.text);
   } finally {
     await mcp.close(); await stopProcess(core); fs.rmSync(env.XTRAOS_HOME, { recursive: true, force: true });
+  }
+});
+
+// ADR 0019: the installed MCP server starts the core itself when it is not running.
+test('autostart: MCP starts the core on demand when its binary is installed', async () => {
+  const env = testEnv();
+  const mcp = new McpClient({ ...env, XTRAOS_CORE_EXE: CORE_EXE } as any);
+  let pid = 0;
+  try {
+    await mcp.init();
+    const t0 = Date.now();
+    const r = await mcp.callTool('status');
+    assert.equal(r.isError, false, r.text);
+    assert.match(r.text, /· running ·/);
+    assert.ok(Date.now() - t0 < 10_000);
+    pid = JSON.parse(fs.readFileSync(`${env.XTRAOS_HOME}/connection.json`, 'utf8')).pid;
+    assert.ok(pid > 0);
+  } finally {
+    await mcp.close();
+    if (pid) try { process.kill(pid); } catch { /* already gone */ }
+    await new Promise((r) => setTimeout(r, 300));
+    fs.rmSync(env.XTRAOS_HOME, { recursive: true, force: true });
   }
 });

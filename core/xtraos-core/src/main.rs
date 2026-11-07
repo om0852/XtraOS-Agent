@@ -1,5 +1,8 @@
-//! `xtraos-core` binary: starts the pipe server and runs until Ctrl+C.
+//! `xtraos-core` binary: starts the pipe server and runs until Ctrl+C (or the session ends).
 //! Environment overrides (tests): XTRAOS_PIPE, XTRAOS_TOKEN, XTRAOS_HOME.
+//! Release builds are windowless (no console window at login or when MCP starts the core,
+//! ADR 0019); output still reaches redirected stdout/stderr (tests read the READY line).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use std::sync::Arc;
 
 use xtraos_core::{actionlog::ActionLog, ipc, pairing, protocol};

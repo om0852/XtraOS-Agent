@@ -3,7 +3,26 @@
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { CoreError, HINT_START_CORE } from './errors.ts';
+
+/** The core is not running (no connection info, or nothing listens on the pipe). */
+class Unreachable extends CoreError {}
+
+/**
+ * Where the core binary is when installed (ADR 0019): <prefix>/bin/xtraos-core.exe next to
+ * <prefix>/mcp. XTRAOS_CORE_EXE overrides; XTRAOS_NO_AUTOSTART=1 disables starting it.
+ */
+export function coreExe(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.XTRAOS_NO_AUTOSTART === '1') return null;
+  if (env.XTRAOS_CORE_EXE) return fs.existsSync(env.XTRAOS_CORE_EXE) ? env.XTRAOS_CORE_EXE : null;
+  // Installed bundle: <prefix>/mcp/xtraos-mcp.mjs; source tree: <repo>/mcp/src/core-client.ts.
+  for (const up of [['..'], ['..', '..']]) {
+    const exe = path.resolve(import.meta.dirname, ...up, 'bin', 'xtraos-core.exe');
+    if (fs.existsSync(exe)) return exe;
+  }
+  return null;
+}
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: CoreError) => void; timer: NodeJS.Timeout };
 
@@ -17,7 +36,7 @@ export function resolveConnection(env: NodeJS.ProcessEnv = process.env): Connect
     try {
       pipe = JSON.parse(fs.readFileSync(path.join(home, 'connection.json'), 'utf8')).pipe as string;
     } catch {
-      throw new CoreError('NOT_PAIRED', 'XtraOS core connection info not found', HINT_START_CORE);
+      throw new Unreachable('NOT_PAIRED', 'XtraOS core connection info not found', HINT_START_CORE);
     }
   }
   let token = env.XTRAOS_TOKEN;
@@ -25,7 +44,7 @@ export function resolveConnection(env: NodeJS.ProcessEnv = process.env): Connect
     try {
       token = fs.readFileSync(path.join(home, 'pairing.token'), 'utf8').trim();
     } catch {
-      throw new CoreError('NOT_PAIRED', 'XtraOS pairing token not found', HINT_START_CORE);
+      throw new Unreachable('NOT_PAIRED', 'XtraOS pairing token not found', HINT_START_CORE);
     }
   }
   return { pipe, token };
@@ -68,13 +87,38 @@ export class CoreClient {
     return this.connecting;
   }
 
+  private lastAutostart = 0;
+
+  /** Connects; if the core is not running and its binary is installed, starts it once (ADR 0019). */
   private async connect(): Promise<void> {
+    try {
+      return await this.connectOnce();
+    } catch (e) {
+      const exe = coreExe();
+      if (!(e instanceof Unreachable) || !exe || Date.now() - this.lastAutostart < 30_000) throw e;
+      this.lastAutostart = Date.now();
+      // Detached and hidden: the core lives in the user's session (tray icon, kill switch)
+      // and outlives this MCP server.
+      spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 200));
+        try {
+          return await this.connectOnce();
+        } catch (e2) {
+          if (!(e2 instanceof Unreachable) || Date.now() > deadline) throw e2;
+        }
+      }
+    }
+  }
+
+  private async connectOnce(): Promise<void> {
     const { pipe, token } = this.getConnection();
     const sock = await new Promise<net.Socket>((resolve, reject) => {
       const s = net.connect(pipe);
       s.once('connect', () => resolve(s));
       s.once('error', (e: NodeJS.ErrnoException) => {
-        reject(new CoreError('NOT_PAIRED', `XtraOS core is not reachable (${e.code ?? e.message})`, HINT_START_CORE));
+        reject(new Unreachable('NOT_PAIRED', `XtraOS core is not reachable (${e.code ?? e.message})`, HINT_START_CORE));
       });
     });
     this.sock = sock;

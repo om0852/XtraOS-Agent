@@ -11,7 +11,9 @@
 flow F3. **M4 Perception + background-first actions: closed** (ADRs 0014–0016) — gate 10/10
 PASS, 0 SKIP; large-list observe latency is a stated miss (Phase 2). **M5 Safety: closed**
 (ADRs 0017, 0018) — kill switch 15 ms, policy + approvals, overlay; safety e2e 6/6.
-**Next: M6 Release 0.1.** Only work on the current phase (see CLAUDE.md §3).
+**M6 Release 0.1: closed as an unsigned developer preview** (ADRs 0019, 0020) — install
+test 12/12, flows F2/F3/F4/F6/F10 recorded, bench report; open: signing + fresh SAC-on test.
+**Phase 1 complete. Next: Phase 2 (Smart & cheap)** — start only when the owner says so. Only work on the current phase (see CLAUDE.md §3).
 Each milestone has exit criteria; a milestone is done only when all are met and evidenced.
 
 ## Phase 0 — Spikes & skeleton (≈ 1 week)

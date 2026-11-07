@@ -62,6 +62,7 @@ const WM_APP_STATE: u32 = WM_APP + 4;
 const WM_TRAY: u32 = WM_APP + 10;
 pub const ID_STOP: usize = 1001;
 pub const ID_RESUME: usize = 1002;
+pub const ID_QUIT: usize = 1003;
 const HOTKEY_ID: i32 = 1;
 const OVERLAY_TIMER: usize = 1;
 pub const PROMPT_BUTTON_BASE: i32 = 100;
@@ -896,6 +897,7 @@ unsafe extern "system" fn ui_proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
             match wp.0 & 0xFFFF {
                 ID_STOP => stop(),
                 ID_RESUME => resume(),
+                ID_QUIT => quit(h),
                 _ => {}
             }
             LRESULT(0)
@@ -969,6 +971,9 @@ unsafe fn tray_menu(h: WHWND) {
         ID_RESUME,
         PCWSTR(resume_label.as_ptr()),
     );
+    let quit_label = wide("Quit XtraOS core");
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, PCWSTR(quit_label.as_ptr()));
     let mut pt = WPOINT::default();
     let _ = GetCursorPos(&mut pt);
     let _ = SetForegroundWindow(h); // required so the menu closes when clicking elsewhere
@@ -986,8 +991,19 @@ unsafe fn tray_menu(h: WHWND) {
     match cmd.0 as usize {
         ID_STOP => stop(),
         ID_RESUME => resume(),
+        ID_QUIT => quit(h),
         _ => {}
     }
+}
+
+/// Tray "Quit" (and the uninstaller): halt input, remove the icon, end the process. Clients
+/// see the pipe close; the MCP server starts the core again on the next call (ADR 0019).
+unsafe fn quit(h: WHWND) -> ! {
+    stop();
+    let nid = tray_data(h, "");
+    let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+    eprintln!("[xtraos-core] quit from the tray");
+    std::process::exit(0)
 }
 
 unsafe fn refresh_overlay(activity: bool) {

@@ -127,6 +127,7 @@ extern "system" {
     fn GetClipboardData(format: u32) -> *mut c_void;
     fn SetClipboardData(format: u32, mem: *mut c_void) -> *mut c_void;
     fn GetLastInputInfo(info: *mut LASTINPUTINFO) -> i32;
+    fn WaitForInputIdle(process: *mut c_void, ms: u32) -> u32;
 }
 
 #[repr(C)]
@@ -142,6 +143,42 @@ extern "system" {
     fn GlobalUnlock(mem: *mut c_void) -> i32;
     fn GlobalFree(mem: *mut c_void) -> *mut c_void;
     fn GetTickCount() -> u32;
+    fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+    fn CloseHandle(h: *mut c_void) -> i32;
+}
+
+const PROCESS_QUERY_INFORMATION: u32 = 0x0400;
+const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+const SYNCHRONIZE: u32 = 0x0010_0000;
+
+/// Lets typing follow the target app's pace: WaitForInputIdle returns once the app has
+/// processed the keystrokes queued so far (M6 bench: `type` used to return while the app was
+/// still working through them, so a following observe could see half the text).
+/// https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-waitforinputidle
+struct InputIdle(*mut c_void);
+
+impl InputIdle {
+    fn open(window: HWND) -> Option<Self> {
+        let pid = crate::winmgr::pid_of(window);
+        let mut h = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | SYNCHRONIZE, 0, pid) };
+        if h.is_null() {
+            h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid) };
+        }
+        (!h.is_null()).then_some(InputIdle(h))
+    }
+
+    fn wait(&self, ms: u32) {
+        // SendInput hands events to the system input thread, which delivers them to the app's
+        // queue a moment later; checking "idle" at once can pass before they even arrive.
+        sleep(Duration::from_millis(3));
+        unsafe { WaitForInputIdle(self.0, ms) };
+    }
+}
+
+impl Drop for InputIdle {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.0) };
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -726,6 +763,10 @@ pub enum INPUTDESC {
 }
 
 fn send_char(units: &[INPUTDESC]) -> Result<(), ActError> {
+    send(&char_events(units))
+}
+
+fn char_events(units: &[INPUTDESC]) -> Vec<INPUT> {
     let mut evs = Vec::with_capacity(units.len() * 2);
     for &u in units {
         match u {
@@ -739,7 +780,7 @@ fn send_char(units: &[INPUTDESC]) -> Result<(), ActError> {
             }
         }
     }
-    send(&evs)
+    evs
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1117,19 +1158,59 @@ fn type_text(p: &Value) -> Result<Value, ActError> {
     }
     foreground_is(window)?;
     let chars = text_events(text);
-    for (i, units) in chars.iter().enumerate() {
-        if i % 8 == 0 {
-            foreground_is(window)?;
+    let idle = InputIdle::open(window);
+    // Chunks of 8 characters, each followed by waiting until the app has processed them
+    // (adaptive: fast apps get the text at once, slow ones are not flooded). The foreground
+    // is re-checked before every chunk, so nothing goes to a window the user switched to.
+    for chunk in chars.chunks(8) {
+        foreground_is(window)?;
+        let evs: Vec<INPUT> = chunk.iter().flat_map(|u| char_events(u)).collect();
+        send(&evs)?;
+        match &idle {
+            Some(w) => w.wait(250),
+            None => sleep(Duration::from_millis(4 * chunk.len() as u64)),
         }
-        send_char(units)?;
-        sleep(Duration::from_millis(4));
     }
+    // Wait until the app has the whole text — before Enter (else e.g. a browser may search a
+    // partial query) and before returning (so a following observe sees all of it): the app
+    // goes idle, then the focused field's value stops changing (≤ 2 s).
+    if let Some(w) = &idle {
+        w.wait(1000);
+    }
+    let settled = settle_focused_value();
     if submit {
         foreground_is(window)?;
         send_char(&[INPUTDESC::Vk(VK_RETURN)])?;
+        if let Some(w) = &idle {
+            w.wait(1000);
+        }
     }
     // Never echo the text back (it may be sensitive); report only the count.
-    Ok(json!({"typed_chars": chars.len(), "submitted": submit, "mode": "input"}))
+    Ok(
+        json!({"typed_chars": chars.len(), "submitted": submit, "settled": settled, "mode": "input"}),
+    )
+}
+
+/// Polls the focused field's value length until it is unchanged twice in a row (40 ms apart,
+/// at most 2 s). None when the focused element exposes no value (e.g. a terminal).
+fn settle_focused_value() -> Option<bool> {
+    let mut last = crate::perceive::focused_value_len()?;
+    let t0 = std::time::Instant::now();
+    let mut stable = 0;
+    while t0.elapsed() < Duration::from_secs(2) {
+        sleep(Duration::from_millis(40));
+        let now = crate::perceive::focused_value_len()?;
+        if now == last {
+            stable += 1;
+            if stable >= 2 {
+                return Some(true);
+            }
+        } else {
+            stable = 0;
+            last = now;
+        }
+    }
+    Some(false)
 }
 
 fn press_keys(p: &Value) -> Result<Value, ActError> {

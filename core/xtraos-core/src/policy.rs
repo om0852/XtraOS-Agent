@@ -211,6 +211,13 @@ const SEND_WORDS: &[&str] = &[
     "publish",
 ];
 const PURCHASE_WORDS: &[&str] = &[
+    "order now",
+    "confirm and pay",
+    "complete order",
+    "place order and pay",
+    "pay with card",
+    "pay with upi",
+    "pay securely",
     "buy",
     "buy now",
     "place order",
@@ -227,6 +234,16 @@ const PURCHASE_WORDS: &[&str] = &[
     "subscribe",
 ];
 const DELETE_WORDS: &[&str] = &[
+    "delete all",
+    "delete account",
+    "delete my account",
+    "delete everything",
+    "delete forever",
+    "remove all",
+    "clear all",
+    "erase all",
+    "close account",
+    "deactivate account",
     "delete",
     "delete permanently",
     "permanently delete",
@@ -462,7 +479,10 @@ pub fn classify(f: &Facts) -> Vec<(Class, String)> {
     let m = f.method.as_str();
     let acts = INPUT_METHODS.contains(&m);
     if let Some(name) = &f.element {
-        if m == "click" || m == "set_value" || m == "browser:click" {
+        if matches!(
+            m,
+            "click" | "set_value" | "browser:click" | "mouse" | "touch" | "pen"
+        ) {
             if name_is(name, SEND_WORDS) || name_is(name, SEND_WORDS_INTL) {
                 out.push((Class::MessageSend, format!("\"{name}\"")));
             }
@@ -1054,5 +1074,24 @@ mod tests {
             (5, 1),
             "clamped"
         );
+    }
+
+    #[test]
+    fn review_words_and_pointer_actions() {
+        assert!(name_is("Delete all", DELETE_WORDS));
+        assert!(name_is("Delete account", DELETE_WORDS));
+        assert!(name_is("Order now", PURCHASE_WORDS));
+        assert!(name_is("Confirm and pay", PURCHASE_WORDS));
+        for m in ["mouse", "touch", "pen"] {
+            let f = Facts {
+                method: m.into(),
+                element: Some("Buy now".into()),
+                ..Default::default()
+            };
+            assert!(
+                classify(&f).iter().any(|(c, _)| *c == Class::Purchase),
+                "{m}"
+            );
+        }
     }
 }

@@ -520,7 +520,12 @@ pub fn gather_targets(method: &str, p: &Value) -> (Facts, String, Vec<HWND>) {
                 continue;
             }
             hwnds.push(h);
-            if kx == "x" && method == "click" && f.element.is_none() {
+            let pointer_press = method == "click"
+                || (method == "mouse" && matches!(p["action"].as_str(), Some("down" | "up")))
+                || (method == "touch"
+                    && matches!(p["action"].as_str().unwrap_or("tap"), "tap" | "long_press"))
+                || (method == "pen" && p["action"].as_str().unwrap_or("tap") == "tap");
+            if kx == "x" && pointer_press && f.element.is_none() {
                 if let Some((name, pw)) = perceive::element_at(pt) {
                     if !name.is_empty() {
                         what = format!("{what} \"{}\"", perceive::clip(&name, 40));
@@ -654,9 +659,23 @@ pub fn gather_targets(method: &str, p: &Value) -> (Facts, String, Vec<HWND>) {
         "launch_app" => {
             f.elevated = p.get("elevated").and_then(Value::as_bool).unwrap_or(false);
             let app = p.get("app").and_then(Value::as_str).unwrap_or("?");
+            let args = match p.get("args") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Array(a)) => a
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                _ => String::new(),
+            };
             what = format!(
-                "launch {}{}",
+                "launch {}{}{}",
                 perceive::clip(app, 60),
+                if args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" with arguments: {}", perceive::clip(&args, 200))
+                },
                 if f.elevated { " as administrator" } else { "" }
             );
         }
@@ -1337,11 +1356,12 @@ unsafe extern "system" fn ui_proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
             LRESULT(0)
         }
         WM_COMMAND => {
+            // Any program can post messages here, so only the safe commands are accepted:
+            // Stop, and Quit (the uninstaller). Resume comes only from the tray menu itself
+            // (ADR 0041).
             match wp.0 & 0xFFFF {
                 ID_STOP => stop(),
-                ID_RESUME => resume(),
                 ID_QUIT => quit(h),
-                ID_VIEWER => open_viewer(),
                 _ => {}
             }
             LRESULT(0)
@@ -1671,6 +1691,64 @@ unsafe fn create_prompt(id: u64) {
     let _ = FlashWindow(hw, true);
 }
 
+static SYNTHETIC_OK: AtomicBool = AtomicBool::new(false);
+
+/// Unelevated test-mode admin helper only (it has no extra power): accept synthetic answers.
+pub fn allow_synthetic_answers() {
+    SYNTHETIC_OK.store(true, Ordering::SeqCst);
+}
+
+/// True if the input message being processed comes from a real device (ADR 0041).
+fn from_hardware_input() -> bool {
+    if SYNTHETIC_OK.load(Ordering::SeqCst) {
+        return true;
+    }
+    #[repr(C)]
+    struct InputMessageSource {
+        device_type: u32,
+        origin_id: u32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetCurrentInputMessageSource(s: *mut InputMessageSource) -> i32;
+    }
+    const IMO_HARDWARE: u32 = 0x0000_0001;
+    let mut s = InputMessageSource {
+        device_type: 0,
+        origin_id: 0,
+    };
+    unsafe { GetCurrentInputMessageSource(&mut s) != 0 && s.origin_id == IMO_HARDWARE }
+}
+
+/// Tests only, in-process: answer the open dialog with button `i` as the human would. A
+/// separate process cannot call this (ADR 0041).
+#[doc(hidden)]
+pub fn answer_prompt_for_tests(i: usize) -> bool {
+    let id = PROMPTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| {
+            m.iter()
+                .find(|(_, p)| p.open && p.hwnd != 0)
+                .map(|(id, _)| *id)
+        });
+    match id {
+        Some(id) => {
+            answer(id, i);
+            post(WM_APP_CLOSE_PROMPT, id as usize);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Tests only, in-process: what the tray's "Resume" does.
+#[doc(hidden)]
+pub fn resume_for_tests() {
+    resume();
+}
+
 fn answer(id: u64, i: usize) {
     if let Some(p) = PROMPTS
         .lock()
@@ -1698,6 +1776,12 @@ unsafe extern "system" fn prompt_proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM
             if let Some((cancel, n)) = cancel {
                 let i = ctl - PROMPT_BUTTON_BASE;
                 if (0..n as i32).contains(&i) {
+                    // Only the safe answer may come from anywhere; any other answer must come
+                    // from the user's real mouse/keyboard, never from another program's
+                    // BM_CLICK / WM_COMMAND / SendInput (ADR 0041).
+                    if i as usize != cancel && !from_hardware_input() {
+                        return LRESULT(0);
+                    }
                     answer(id, i as usize);
                     let _ = DestroyWindow(h);
                 } else if ctl == IDCANCEL.0 || ctl == IDOK.0 {

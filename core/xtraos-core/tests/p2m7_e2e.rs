@@ -574,8 +574,7 @@ fn answer_next_dialog(i: i32) -> std::thread::JoinHandle<Option<String>> {
                 let mut buf = [0u16; 2048];
                 let st = unsafe { GetDlgItem(d as _, xtraos_core::safety::PROMPT_TEXT_ID) };
                 let n = unsafe { GetWindowTextW(st, buf.as_mut_ptr(), 2048) };
-                let b = unsafe { GetDlgItem(d as _, xtraos_core::safety::PROMPT_BUTTON_BASE + i) };
-                unsafe { SendMessageW(b, 0x00F5, 0, 0) };
+                xtraos_core::safety::answer_prompt_for_tests(i as usize);
                 return Some(String::from_utf16_lossy(&buf[..n.max(0) as usize]));
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -624,8 +623,7 @@ async fn tl01_max_actions_per_task() {
         "no dialog spam"
     );
     // Resume from the tray resets the task.
-    let ui = xtraos_core::safety::ui_window().unwrap();
-    unsafe { PostMessageW(ui as _, 0x0111, xtraos_core::safety::ID_RESUME, 0) };
+    xtraos_core::safety::resume_for_tests();
     std::thread::sleep(Duration::from_millis(200));
     for _ in 0..5 {
         core.ok("list_windows", json!({})).await;

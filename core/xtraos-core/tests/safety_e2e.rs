@@ -38,8 +38,6 @@ struct KeyIn {
 
 #[link(name = "user32")]
 extern "system" {
-    fn PostMessageW(h: *mut c_void, msg: u32, w: usize, l: isize) -> i32;
-    fn SendMessageW(h: *mut c_void, msg: u32, w: usize, l: isize) -> isize;
     fn GetDlgItem(h: *mut c_void, id: i32) -> *mut c_void;
     fn GetWindowTextW(h: *mut c_void, buf: *mut u16, n: i32) -> i32;
     fn GetWindowRect(h: *mut c_void, r: *mut Rect) -> i32;
@@ -49,16 +47,12 @@ extern "system" {
     fn SendInput(n: u32, inputs: *const KeyIn, size: i32) -> u32;
 }
 
-const WM_COMMAND: u32 = 0x0111;
-const BM_CLICK: u32 = 0x00F5;
-
 fn h(v: usize) -> *mut c_void {
     v as *mut c_void
 }
 
 fn resume_from_tray() {
-    let ui = safety::ui_window().expect("safety UI running");
-    unsafe { PostMessageW(h(ui), WM_COMMAND, safety::ID_RESUME, 0) };
+    xtraos_core::safety::resume_for_tests();
     for _ in 0..50 {
         if !safety::stopped() {
             return;
@@ -82,8 +76,7 @@ fn human_answers(i: i32) -> std::thread::JoinHandle<String> {
             if let Some(&d) = safety::prompt_windows().first() {
                 std::thread::sleep(Duration::from_millis(300)); // a human reads first
                 let msg = text_of(unsafe { GetDlgItem(h(d), safety::PROMPT_TEXT_ID) });
-                let b = unsafe { GetDlgItem(h(d), safety::PROMPT_BUTTON_BASE + i) };
-                unsafe { SendMessageW(b, BM_CLICK, 0, 0) };
+                xtraos_core::safety::answer_prompt_for_tests(i as usize);
                 return msg;
             }
             assert!(t0.elapsed() < Duration::from_secs(10), "no dialog appeared");

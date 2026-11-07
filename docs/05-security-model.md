@@ -54,6 +54,15 @@ user's input. Password targets are never recorded; typed text becomes an editabl
 Touch / pen (ADR 0036): the same polite rules as the mouse. Multi-finger Windows gestures ask
 first.
 
+Review fixes (ADR 0041):
+- **Approvals:** a "yes" in an approval dialog counts only from the user's real mouse or
+  keyboard. Clicks from other programs (BM_CLICK, posted messages, SendInput) are ignored;
+  the safe answer always works.
+- **Kill switch:** the hidden window accepts only Stop and Quit as messages; Resume comes
+  only from the tray menu.
+- **Admin-window grants** cover reading only and are tied to the process instance.
+- **`launch_app` dialogs** show the arguments.
+
 Sandbox desktop (ADR 0040): the agent can work in a disposable Windows Sandbox.
 - **What is shared:** the XtraOS program folder (read-only), one exchange folder and a
   session token (read-only). Network is off by default; no clipboard, printer, microphone

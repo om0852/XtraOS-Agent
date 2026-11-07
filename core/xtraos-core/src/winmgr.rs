@@ -218,6 +218,25 @@ pub fn pid_of(h: HWND) -> u32 {
     pid
 }
 
+/// Creation time of a process (FILETIME as u64): with the PID it identifies one process
+/// instance, so a recycled PID never inherits anything (ADR 0041).
+pub fn process_start_time(pid: u32) -> Option<u64> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetProcessTimes(p: HANDLE, c: *mut u64, e: *mut u64, k: *mut u64, u: *mut u64) -> BOOL;
+    }
+    unsafe {
+        let p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if p.is_null() {
+            return None;
+        }
+        let (mut c, mut e, mut k, mut u) = (0u64, 0u64, 0u64, 0u64);
+        let ok = GetProcessTimes(p, &mut c, &mut e, &mut k, &mut u);
+        CloseHandle(p);
+        (ok != 0).then_some(c)
+    }
+}
+
 /// Full image path of a process by handle (needs PROCESS_QUERY_LIMITED_INFORMATION).
 pub fn image_path_of_handle(p: *mut c_void) -> Option<String> {
     let mut buf = [0u16; 1024];
@@ -264,7 +283,8 @@ fn integrity_of_process(p: HANDLE) -> Option<u32> {
             0,
             &mut need,
         );
-        let mut buf = vec![0u8; need.max(1) as usize];
+        // u64 buffer: 8-byte aligned for the SID_AND_ATTRIBUTES cast below (ADR 0041).
+        let mut buf = vec![0u64; (need.max(1) as usize).div_ceil(8)];
         let ok = GetTokenInformation(
             tok,
             TOKEN_INTEGRITY_LEVEL,

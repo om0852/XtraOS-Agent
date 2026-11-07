@@ -3,7 +3,6 @@
 //! tests/phase2/p2m1-gate.ps1 -Interactive, hands off.
 mod common;
 
-use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
 use common::{code, refs_by_name, tokens, Core, Testbed};
@@ -14,9 +13,6 @@ static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[link(name = "user32")]
 extern "system" {
-    fn PostMessageW(h: *mut c_void, msg: u32, w: usize, l: isize) -> i32;
-    fn SendMessageW(h: *mut c_void, msg: u32, w: usize, l: isize) -> isize;
-    fn GetDlgItem(h: *mut c_void, id: i32) -> *mut c_void;
     fn GetAsyncKeyState(vk: i32) -> i16;
     fn keybd_event(vk: u8, scan: u8, flags: u32, extra: usize);
 }
@@ -26,8 +22,7 @@ fn text(v: &Value) -> String {
 }
 
 fn resume_from_tray() {
-    let ui = safety::ui_window().expect("safety UI");
-    unsafe { PostMessageW(ui as _, 0x0111, safety::ID_RESUME, 0) };
+    xtraos_core::safety::resume_for_tests();
     for _ in 0..50 {
         if !safety::stopped() {
             return;
@@ -41,10 +36,9 @@ fn human_answers(i: i32) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let t0 = Instant::now();
         while t0.elapsed() < Duration::from_secs(10) {
-            if let Some(&d) = safety::prompt_windows().first() {
+            if !safety::prompt_windows().is_empty() {
                 std::thread::sleep(Duration::from_millis(300));
-                let b = unsafe { GetDlgItem(d as _, safety::PROMPT_BUTTON_BASE + i) };
-                unsafe { SendMessageW(b, 0x00F5, 0, 0) };
+                xtraos_core::safety::answer_prompt_for_tests(i as usize);
                 return;
             }
             std::thread::sleep(Duration::from_millis(20));

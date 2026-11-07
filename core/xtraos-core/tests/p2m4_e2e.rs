@@ -17,7 +17,6 @@ static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[link(name = "user32")]
 extern "system" {
-    fn SendMessageW(h: *mut std::ffi::c_void, msg: u32, w: usize, l: isize) -> isize;
     fn GetDlgItem(h: *mut std::ffi::c_void, id: i32) -> *mut std::ffi::c_void;
     fn GetWindowTextW(h: *mut std::ffi::c_void, buf: *mut u16, n: i32) -> i32;
     fn IsWindow(h: *mut std::ffi::c_void) -> i32;
@@ -51,8 +50,7 @@ fn human_answers(i: i32, wait: Duration) -> std::thread::JoinHandle<Option<Strin
                 let mut buf = [0u16; 2048];
                 let st = unsafe { GetDlgItem(d as _, safety::PROMPT_TEXT_ID) };
                 let n = unsafe { GetWindowTextW(st, buf.as_mut_ptr(), 2048) };
-                let b = unsafe { GetDlgItem(d as _, safety::PROMPT_BUTTON_BASE + i) };
-                unsafe { SendMessageW(b, 0x00F5, 0, 0) };
+                xtraos_core::safety::answer_prompt_for_tests(i as usize);
                 return Some(String::from_utf16_lossy(&buf[..n.max(0) as usize]));
             }
             std::thread::sleep(Duration::from_millis(20));

@@ -20,8 +20,6 @@ const GOOD: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab
 
 #[link(name = "user32")]
 extern "system" {
-    fn SendMessageW(h: *mut std::ffi::c_void, msg: u32, w: usize, l: isize) -> isize;
-    fn PostMessageW(h: *mut std::ffi::c_void, msg: u32, w: usize, l: isize) -> i32;
     fn GetDlgItem(h: *mut std::ffi::c_void, id: i32) -> *mut std::ffi::c_void;
     fn GetWindowTextW(h: *mut std::ffi::c_void, buf: *mut u16, n: i32) -> i32;
 }
@@ -276,8 +274,7 @@ fn human_answers(i: i32) -> std::thread::JoinHandle<Option<String>> {
                 let mut buf = [0u16; 2048];
                 let st = unsafe { GetDlgItem(d as _, safety::PROMPT_TEXT_ID) };
                 let n = unsafe { GetWindowTextW(st, buf.as_mut_ptr(), 2048) };
-                let b = unsafe { GetDlgItem(d as _, safety::PROMPT_BUTTON_BASE + i) };
-                unsafe { SendMessageW(b, 0x00F5, 0, 0) };
+                xtraos_core::safety::answer_prompt_for_tests(i as usize);
                 return Some(String::from_utf16_lossy(&buf[..n.max(0) as usize]));
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -327,8 +324,7 @@ async fn br04_send_on_messaging_site_asks() {
 }
 
 fn resume_from_tray() {
-    let ui = safety::ui_window().expect("safety UI");
-    unsafe { PostMessageW(ui as _, 0x0111, safety::ID_RESUME, 0) };
+    xtraos_core::safety::resume_for_tests();
     for _ in 0..100 {
         if !safety::stopped() {
             return;

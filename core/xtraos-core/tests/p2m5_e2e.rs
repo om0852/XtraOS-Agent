@@ -22,7 +22,6 @@ static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 #[link(name = "user32")]
 extern "system" {
     fn SendMessageW(h: *mut c_void, msg: u32, w: usize, l: isize) -> isize;
-    fn PostMessageW(h: *mut c_void, msg: u32, w: usize, l: isize) -> i32;
     fn GetDlgItem(h: *mut c_void, id: i32) -> *mut c_void;
     fn GetWindowTextW(h: *mut c_void, buf: *mut u16, n: i32) -> i32;
     fn FindWindowW(class: *const u16, title: *const u16) -> *mut c_void;
@@ -80,8 +79,7 @@ fn human_answers_helper(i: i32, wait: Duration) -> std::thread::JoinHandle<Optio
 }
 
 fn resume_from_tray() {
-    let ui = safety::ui_window().expect("safety UI");
-    unsafe { PostMessageW(ui as _, 0x0111, safety::ID_RESUME, 0) };
+    safety::resume_for_tests();
     for _ in 0..100 {
         if !safety::stopped() {
             return;
@@ -220,7 +218,7 @@ async fn eh05_06_routing_and_helper_approval() {
     helper::start_unelevated_for_tests(&exe()).expect("helper");
     // The testbed is not elevated, so force this observe through the helper (test hook =
     // the helper API itself); in production the core forwards on ELEVATION_REQUIRED.
-    let human = human_answers_helper(1, Duration::from_secs(15)); // Allow this window 10 min
+    let human = human_answers_helper(1, Duration::from_secs(15)); // Allow once + read for 10 min
     let o =
         helper::forward("observe", &json!({"window": tb.window()})).expect("observe via helper");
     let msg = human
@@ -238,20 +236,23 @@ async fn eh05_06_routing_and_helper_approval() {
         "helper refs are in the helper range: {btn}"
     );
 
-    // Through the core pipe: helper ref → forwarded; window granted → no dialog.
+    // A read under the grant asks nothing (ADR 0041: grants cover reading only).
     let watcher = human_answers_helper(2, Duration::from_secs(3));
+    let again = helper::forward("observe", &json!({"window": tb.window()})).expect("observe");
+    assert!(watcher.join().unwrap().is_none(), "granted read: no dialog");
+    assert_eq!(again["via"], "admin_helper");
+    // Input to an admin window asks every time, even inside a grant.
+    let human = human_answers_helper(0, Duration::from_secs(15)); // Allow once
     let r = core.call("click", json!({"ref": btn})).await;
-    assert!(
-        watcher.join().unwrap().is_none(),
-        "granted window: no second dialog"
-    );
+    let msg = human.join().unwrap().expect("input always asks");
+    assert!(msg.contains("ADMINISTRATOR window"), "{msg}");
     assert!(r.get("result").is_some(), "{r}");
     assert_eq!(
         tb.state()["clicks"]["btnA"],
         1,
         "the click reached the window"
     );
-    eprintln!("EH-05 ok: {btn} clicked via the helper, one dialog");
+    eprintln!("EH-05 ok: {btn}: reads covered by the grant, the click asked again");
 
     // A second window is not granted: Deny blocks, and the dialog shows the text.
     let mut tb2 = Testbed::start(700, 160);

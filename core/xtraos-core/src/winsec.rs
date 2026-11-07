@@ -112,7 +112,8 @@ pub fn user_sid_of_process(process: *mut c_void) -> io::Result<String> {
         }
         let mut needed = 0u32;
         GetTokenInformation(token, TOKEN_USER_CLASS, null_mut(), 0, &mut needed);
-        let mut buf = vec![0u8; needed as usize];
+        // u64 buffer: 8-byte aligned for the SID_AND_ATTRIBUTES cast below (ADR 0041).
+        let mut buf = vec![0u64; (needed as usize).div_ceil(8)];
         let ok = GetTokenInformation(
             token,
             TOKEN_USER_CLASS,

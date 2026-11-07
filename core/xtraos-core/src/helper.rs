@@ -183,6 +183,16 @@ pub const ROUTABLE: &[&str] = &[
 ];
 
 const INPUT_METHODS: &[&str] = &["type", "press_keys", "set_value", "click"];
+/// What a 10-minute window grant covers: reading and looking around only. Every input to an
+/// admin window asks each time (ADR 0041).
+const GRANTABLE: &[&str] = &[
+    "observe",
+    "find",
+    "read_text",
+    "wait_for",
+    "scroll",
+    "focus_window",
+];
 
 /// Processes the helper never touches, whatever it is asked (not from user-writable files).
 const HARD_DENY: &[&str] = &[
@@ -621,7 +631,8 @@ struct Ctx {
     core_pid: u32,
     core_integrity: u32,
     test: bool,
-    grants: HashMap<usize, (u32, Instant)>,
+    /// hwnd → (pid, process creation time, until)
+    grants: HashMap<usize, (u32, Option<u64>, Instant)>,
     recent: VecDeque<Instant>,
 }
 
@@ -687,6 +698,9 @@ pub fn helper_main(args: &[String]) -> i32 {
     let pipe = unsafe { File::from_raw_handle(h as RawHandle) };
 
     safety::set_helper_mode();
+    if a.test {
+        safety::allow_synthetic_answers();
+    }
     if !safety::ensure_started() {
         eprintln!("[xtraos-helper] safety UI unavailable");
         return 9;
@@ -695,10 +709,14 @@ pub fn helper_main(args: &[String]) -> i32 {
     perceive::set_ref_base(perceive::HELPER_REF_BASE);
     let t0 = Instant::now();
 
-    // Exit with the core.
-    let core_raw = core.0 as usize;
+    // Exit with the core. The thread opens its own handle (never one the main thread may
+    // close, ADR 0041).
+    let core_pid = a.core_pid;
     std::thread::spawn(move || {
-        unsafe { WaitForSingleObject(core_raw as HANDLE, INFINITE) };
+        let own = Proc(unsafe { OpenProcess(SYNCHRONIZE, 0, core_pid) });
+        if !invalid_handle(own.0) {
+            unsafe { WaitForSingleObject(own.0, INFINITE) };
+        }
         std::process::exit(0);
     });
     // Nobody connects in time → exit.
@@ -848,8 +866,15 @@ pub fn refuse_reason(
     None
 }
 
-fn grant_valid(g: Option<&(u32, Instant)>, h: HWND, now: Instant) -> bool {
-    g.is_some_and(|&(pid, until)| now < until && winmgr::exists(h) && winmgr::pid_of(h) == pid)
+/// A grant holds only for the same window of the same process instance, before it expires.
+fn grant_valid(g: Option<&(u32, Option<u64>, Instant)>, h: HWND, now: Instant) -> bool {
+    g.is_some_and(|&(pid, start, until)| {
+        now < until
+            && winmgr::exists(h)
+            && winmgr::pid_of(h) == pid
+            && start.is_some()
+            && winmgr::process_start_time(pid) == start
+    })
 }
 
 fn approve(ctx: &mut Ctx, method: &str, p: &Value) -> Result<(), ActError> {
@@ -886,9 +911,10 @@ fn approve(ctx: &mut Ctx, method: &str, p: &Value) -> Result<(), ActError> {
         ));
     }
     let now = Instant::now();
-    if hwnds
-        .iter()
-        .all(|&h| grant_valid(ctx.grants.get(&(h as usize)), h, now))
+    if GRANTABLE.contains(&method)
+        && hwnds
+            .iter()
+            .all(|&h| grant_valid(ctx.grants.get(&(h as usize)), h, now))
     {
         return Ok(());
     }
@@ -904,6 +930,11 @@ fn approve(ctx: &mut Ctx, method: &str, p: &Value) -> Result<(), ActError> {
                 what = format!("{what}\n\nValue: \"{}\"", perceive::clip(t, 200));
             }
         }
+        "press_keys" => {
+            if let Some(k) = p.get("keys") {
+                what = format!("{what}\n\nKeys: {}", perceive::clip(&k.to_string(), 200));
+            }
+        }
         _ => {}
     }
     let before = winmgr::foreground_root();
@@ -916,7 +947,7 @@ fn approve(ctx: &mut Ctx, method: &str, p: &Value) -> Result<(), ActError> {
         ),
         vec![
             "Allow once".into(),
-            "Allow this window for 10 minutes".into(),
+            "Allow once + let it READ this window for 10 minutes".into(),
             "Deny".into(),
         ],
         2,
@@ -930,8 +961,11 @@ fn approve(ctx: &mut Ctx, method: &str, p: &Value) -> Result<(), ActError> {
         Some(0) => Ok(()),
         Some(1) => {
             for &h in &hwnds {
-                ctx.grants
-                    .insert(h as usize, (winmgr::pid_of(h), now + GRANT));
+                let pid = winmgr::pid_of(h);
+                ctx.grants.insert(
+                    h as usize,
+                    (pid, winmgr::process_start_time(pid), now + GRANT),
+                );
             }
             Ok(())
         }
@@ -1023,7 +1057,7 @@ mod tests {
         let bogus = 0x1234usize as HWND;
         assert!(!grant_valid(None, bogus, now));
         assert!(
-            !grant_valid(Some(&(1, now + GRANT)), bogus, now),
+            !grant_valid(Some(&(1, Some(5), now + GRANT)), bogus, now),
             "window gone"
         );
     }

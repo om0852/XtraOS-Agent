@@ -574,6 +574,16 @@ fn snapshot(h: HWND, visible_only: bool) -> Result<Vec<Node>, ActError> {
     Ok(out)
 }
 
+/// Cached subtree of one element (observe scope_ref, P2-M1).
+fn snapshot_from(el: &IUIAutomationElement) -> Result<Vec<Node>, ActError> {
+    let u = uia()?;
+    let root = unsafe { el.BuildUpdatedCache(&u.cache_visible) }
+        .map_err(|e| com_err("reading the element's subtree", e))?;
+    let mut out = Vec::with_capacity(64);
+    collect(&root, 0, false, &mut out);
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Ref table
 
@@ -796,7 +806,14 @@ impl Target {
 // ---------------------------------------------------------------------------------------------
 // Methods
 
-pub const METHODS: &[&str] = &["observe", "find", "read_text", "set_value", "screenshot"];
+pub const METHODS: &[&str] = &[
+    "observe",
+    "find",
+    "read_text",
+    "set_value",
+    "screenshot",
+    "wait_for",
+];
 
 pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
     input::init_dpi();
@@ -810,6 +827,7 @@ pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
             set_value(p)
         }
         "screenshot" => crate::capture::screenshot(p),
+        "wait_for" => wait_for(p),
         m => Err(bad(format!("'{m}' is not a perception method"))),
     }
 }
@@ -896,6 +914,9 @@ pub fn diff(
 }
 
 fn observe(p: &Value) -> Result<Value, ActError> {
+    if let Some(r) = p.get("scope_ref").filter(|v| !v.is_null()) {
+        return observe_scope(p, r);
+    }
     let t0 = Instant::now();
     let h = target_window(p)?;
     let full = p.get("full").and_then(Value::as_bool).unwrap_or(false);
@@ -980,6 +1001,59 @@ fn observe(p: &Value) -> Result<Value, ActError> {
         "elements": keep.len(),
         "opaque": opaque,
         "diff": is_diff,
+        "ms": t0.elapsed().as_millis() as u64,
+    }))
+}
+
+fn max_elements(p: &Value) -> Result<usize, ActError> {
+    match p.get("max_elements") {
+        None | Some(Value::Null) => Ok(120),
+        Some(v) => Ok(v
+            .as_u64()
+            .filter(|n| (1..=500).contains(n))
+            .ok_or_else(|| bad("'max_elements' must be 1..=500"))? as usize),
+    }
+}
+
+/// observe(scope_ref): only one element's subtree (a list, pane, dialog); always the full
+/// list for that scope (no diff, the window's diff baseline is untouched).
+fn observe_scope(p: &Value, r: &Value) -> Result<Value, ActError> {
+    let t0 = Instant::now();
+    let t = resolve(r)?;
+    let max = max_elements(p)?;
+    let nodes = snapshot_from(&t.el.0)?;
+    let ranks: Vec<Option<u8>> = nodes
+        .iter()
+        .map(|n| if n.chrome { None } else { n.info.rank() })
+        .collect();
+    let (keep, dropped) = select(&ranks, max);
+    let win = t.window as usize;
+    let scope_line = nodes.first().map(|n| n.info.line()).unwrap_or_default();
+    let text = with_table(|tab| {
+        let mut out = Vec::with_capacity(keep.len());
+        for &i in &keep {
+            let rf = tab.ref_for(win, &nodes[i]);
+            out.push(format!("e{rf} {}", nodes[i].info.line()));
+        }
+        tab.touch(win);
+        let mut footer = format!("-- {} elements in scope", keep.len());
+        if dropped > 0 {
+            footer.push_str(&format!(" (+{dropped} more; raise max_elements)"));
+        }
+        format!(
+            "{} scope {} {}\n{}\n{footer}",
+            winmgr::window_ref(t.window),
+            r.as_str().unwrap_or("?"),
+            scope_line,
+            out.join("\n")
+        )
+    });
+    Ok(json!({
+        "text": text,
+        "window": winmgr::window_ref(t.window),
+        "elements": keep.len(),
+        "opaque": false,
+        "diff": false,
         "ms": t0.elapsed().as_millis() as u64,
     }))
 }
@@ -1091,42 +1165,232 @@ fn read_text(p: &Value) -> Result<Value, ActError> {
         element_text(&t.el.0).unwrap_or_default()
     } else {
         let h = target_window(p)?;
-        let nodes = snapshot(h, false)?;
-        // The largest visible element with a TextPattern (editors, documents, terminals — Windows
-        // Terminal exposes its buffer on a non-Document element, found in flow F6), else the
-        // largest document/edit with a value, else the visible texts.
-        let area = |n: &&Node| n.info.rect.2 as i64 * n.info.rect.3 as i64;
-        let usable = |n: &&Node| !n.info.password && !n.info.offscreen && n.info.rect.2 > 0;
-        let best = nodes
-            .iter()
-            .skip(1)
-            .filter(usable)
-            .filter(|n| n.info.text)
-            .max_by_key(area)
-            .or_else(|| {
-                nodes
-                    .iter()
-                    .skip(1)
-                    .filter(usable)
-                    .filter(|n| {
-                        n.info.value.is_some() && matches!(n.info.role, "Document" | "Edit")
-                    })
-                    .max_by_key(area)
-            });
-        match best {
-            Some(n) => element_text(&n.el.0).unwrap_or_default(),
-            None => nodes
-                .iter()
-                .filter(|n| {
-                    n.info.role == "Text" && !n.info.offscreen && !n.info.name.trim().is_empty()
-                })
-                .map(|n| n.info.name.trim().to_string())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        }
+        main_text(&snapshot(h, false)?)
     };
     let (text, truncated) = shape_text(&raw, last);
     Ok(json!({"text": text, "truncated": truncated}))
+}
+
+/// A window's main text: the largest visible element with a TextPattern (editors, documents,
+/// terminals — Windows Terminal exposes its buffer on a non-Document element, flow F6), else
+/// the largest document/edit with a value, else the visible texts.
+fn main_text(nodes: &[Node]) -> String {
+    let area = |n: &&Node| n.info.rect.2 as i64 * n.info.rect.3 as i64;
+    let usable = |n: &&Node| !n.info.password && !n.info.offscreen && n.info.rect.2 > 0;
+    let best = nodes
+        .iter()
+        .skip(1)
+        .filter(usable)
+        .filter(|n| n.info.text)
+        .max_by_key(area)
+        .or_else(|| {
+            nodes
+                .iter()
+                .skip(1)
+                .filter(usable)
+                .filter(|n| n.info.value.is_some() && matches!(n.info.role, "Document" | "Edit"))
+                .max_by_key(area)
+        });
+    match best {
+        Some(n) => element_text(&n.el.0).unwrap_or_default(),
+        None => nodes
+            .iter()
+            .filter(|n| {
+                n.info.role == "Text" && !n.info.offscreen && !n.info.name.trim().is_empty()
+            })
+            .map(|n| n.info.name.trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// wait_for (P2-M1, ADR 0022): conditions polled in the core, no agent round trips.
+
+/// Visible text of a tree (names + values, never password values), lowercase.
+fn visible_text(nodes: &[Node]) -> String {
+    let mut s = String::new();
+    for n in nodes {
+        if n.info.offscreen {
+            continue;
+        }
+        s.push_str(&n.info.name.to_lowercase());
+        s.push('\n');
+        if let Some(v) = n.info.value.as_ref().filter(|_| !n.info.password) {
+            s.push_str(&v.to_lowercase());
+            s.push('\n');
+        }
+    }
+    s
+}
+
+fn fingerprint(nodes: &[Node]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for n in nodes {
+        n.info.line().hash(&mut h);
+        n.info.rect.hash(&mut h);
+    }
+    h.finish()
+}
+
+fn wait_for(p: &Value) -> Result<Value, ActError> {
+    let t0 = Instant::now();
+    let timeout = match p.get("timeout_ms") {
+        None | Some(Value::Null) => Duration::from_secs(10),
+        Some(v) => Duration::from_millis(
+            v.as_u64()
+                .filter(|n| (100..=120_000).contains(n))
+                .ok_or_else(|| bad("'timeout_ms' must be 100..=120000"))?,
+        ),
+    };
+    let lower = |k: &str| {
+        p.get(k)
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+    };
+    let title = lower("window_title");
+    let text = lower("text_contains");
+    let ref_gone = p.get("ref_gone").filter(|v| !v.is_null()).cloned();
+    if let Some(r) = &ref_gone {
+        parse_elem_ref(r).ok_or_else(|| bad("'ref_gone' must look like \"e12\""))?;
+    }
+    let window_gone = p
+        .get("window_gone")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let idle = match p.get("idle_ms") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(Duration::from_millis(
+            v.as_u64()
+                .filter(|n| (50..=60_000).contains(n))
+                .ok_or_else(|| bad("'idle_ms' must be 50..=60000"))?,
+        )),
+    };
+    if title.is_none() && text.is_none() && ref_gone.is_none() && !window_gone && idle.is_none() {
+        return Err(bad(
+            "give at least one condition: window_title, text_contains, ref_gone, window_gone, idle_ms",
+        ));
+    }
+    // The window: given, or the foreground one for tree conditions (none needed for a title
+    // search across windows or for ref_gone).
+    let window: Option<HWND> = match p.get("window").filter(|v| !v.is_null()) {
+        Some(v) => {
+            let h = winmgr::parse_ref(v).ok_or_else(|| bad("window must be a ref like \"w123\""))?
+                as HWND;
+            if window_gone && !winmgr::exists(h) {
+                None // already gone: met at once below
+            } else {
+                Some(target_window(p)?)
+            }
+        }
+        None if text.is_some() || idle.is_some() => Some(target_window(p)?),
+        None => None,
+    };
+    if window_gone && window.is_none() && p.get("window").is_none_or(Value::is_null) {
+        return Err(bad("'window_gone' needs 'window'"));
+    }
+    let mut last_fp: Option<u64> = None;
+    let mut last_change = Instant::now();
+    loop {
+        crate::safety::check()?;
+        let mut unmet: Vec<&str> = Vec::new();
+        let mut found: Option<HWND> = window;
+        let alive = window.is_some_and(winmgr::exists);
+        if window_gone && alive {
+            unmet.push("window_gone");
+        }
+        if let Some(t) = &title {
+            let hit = match window {
+                Some(w) => alive && winmgr::title(w).to_lowercase().contains(t.as_str()),
+                None => {
+                    found = winmgr::listable_windows().into_iter().find(|&w| {
+                        !crate::safety::is_own_window(w)
+                            && winmgr::title(w).to_lowercase().contains(t.as_str())
+                    });
+                    found.is_some()
+                }
+            };
+            if !hit {
+                unmet.push("window_title");
+            }
+        }
+        if let Some(r) = &ref_gone {
+            let still = match resolve(r) {
+                Ok(t) => unsafe { t.el.0.CurrentIsOffscreen() }
+                    .map(|b| !b.as_bool())
+                    .unwrap_or(false),
+                Err(_) => false,
+            };
+            if still {
+                unmet.push("ref_gone");
+            }
+        }
+        if text.is_some() || idle.is_some() {
+            match window.filter(|_| alive) {
+                None => {
+                    if text.is_some() {
+                        unmet.push("text_contains");
+                    }
+                    if idle.is_some() {
+                        unmet.push("idle_ms");
+                    }
+                }
+                Some(w) => {
+                    let nodes = snapshot(w, true)?;
+                    if let Some(t) = &text {
+                        let hit = visible_text(&nodes).contains(t.as_str())
+                            || main_text(&nodes).to_lowercase().contains(t.as_str());
+                        if !hit {
+                            unmet.push("text_contains");
+                        }
+                    }
+                    if let Some(d) = idle {
+                        let fp = fingerprint(&nodes);
+                        if last_fp != Some(fp) {
+                            last_fp = Some(fp);
+                            last_change = Instant::now();
+                        }
+                        if last_change.elapsed() < d {
+                            unmet.push("idle_ms");
+                        }
+                    }
+                }
+            }
+        }
+        if unmet.is_empty() {
+            let mut met = Vec::new();
+            for (k, on) in [
+                ("window_title", title.is_some()),
+                ("text_contains", text.is_some()),
+                ("ref_gone", ref_gone.is_some()),
+                ("window_gone", window_gone),
+                ("idle_ms", idle.is_some()),
+            ] {
+                if on {
+                    met.push(k);
+                }
+            }
+            return Ok(json!({
+                "met": met,
+                "window": found.filter(|&w| winmgr::exists(w)).map(winmgr::window_ref),
+                "ms": t0.elapsed().as_millis() as u64,
+            }));
+        }
+        if t0.elapsed() >= timeout {
+            return Err(err(
+                "TIMEOUT",
+                format!(
+                    "not met after {} ms: {}",
+                    timeout.as_millis(),
+                    unmet.join(", ")
+                ),
+                "Check the condition (observe the window), or wait longer with timeout_ms.",
+            ));
+        }
+        sleep(Duration::from_millis(250));
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

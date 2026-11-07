@@ -6,6 +6,7 @@
 //! Only this crate talks to the OS (CLAUDE.md §3).
 pub mod actionlog;
 pub mod capture;
+pub mod exec;
 pub mod input;
 pub mod ipc;
 pub mod pairing;

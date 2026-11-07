@@ -153,17 +153,31 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
         let (outcome, info) = match outcome {
             Outcome::Execute { id, method, params } => {
                 let m = method.clone();
+                let log = shared.log.clone();
+                let sess = conn
+                    .session
+                    .as_ref()
+                    .map(|s| (s.id.clone(), s.client.clone()));
                 let res = tokio::task::spawn_blocking(move || {
                     // Policy gate first (may show a confirm dialog), then the action.
                     let approval = crate::safety::authorize(&m, &params)?;
-                    let r = if crate::safety::METHODS.contains(&m.as_str()) {
-                        crate::safety::run(&m, &params)
-                    } else if crate::winmgr::METHODS.contains(&m.as_str()) {
-                        crate::winmgr::run(&m, &params)
-                    } else if crate::perceive::METHODS.contains(&m.as_str()) {
-                        crate::perceive::run(&m, &params)
+                    let r = if m == "batch" {
+                        // Each step is authorised and logged on its own (ADR 0022).
+                        crate::exec::batch(&params, &mut |s| {
+                            let name = format!("batch:{}", s.tool);
+                            log.record(&Entry {
+                                ts_ms: protocol::now_ms(),
+                                session: sess.as_ref().map(|x| x.0.as_str()),
+                                client: sess.as_ref().map(|x| x.1.as_str()),
+                                method: &name,
+                                ok: s.ok,
+                                code: s.code,
+                                ms: s.ms,
+                                policy: s.policy,
+                            });
+                        })
                     } else {
-                        input::run(&m, &params)
+                        crate::exec::dispatch(&m, &params)
                     };
                     Ok::<_, input::ActError>((r, approval))
                 })

@@ -23,7 +23,7 @@ USER_ACTIVE` (user held a button/modifier or moved the mouse — action aborted,
 
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
-| `observe` | `window?` (default foreground), `full?`, `max_elements?` (default 120) | element lines with refs, or a diff (`+`/`-`/`~`) on repeat; `opaque` flag | P1 (M4) |
+| `observe` | `window?` (default foreground), `scope_ref?` (one element's subtree, P2-M1), `full?`, `max_elements?` (default 120) | element lines with refs, or a diff (`+`/`-`/`~`) on repeat; `opaque` flag | P1 (M4) |
 | `screenshot` | `window?` or `region?` `{x,y,w,h}`, `scale?` (default 0.5, 0.1–1) | PNG + mapping `screen = origin + px/scale` | P1 (M4) |
 | `read_text` | `window` or `ref`, `last_lines?` | text (UIA TextPattern / Value / Name); never password values | P1 (M4) |
 | `find` | `query` (name/role/automation-id substring), `window?` | matching refs (≤ 20) | P1 (M4) |
@@ -62,7 +62,7 @@ all real-input tools accept `idle_ms`. `drag` ends can be refs: `from_ref`, `to_
 | `mouse` | `action` (move/down/up/path), `x, y` or `points[[x,y],...]`, `button?`, `window?` | ok | P1 (M2) |
 | `set_value` | `ref`, `value` (UIA ValuePattern, no typing; password field → `NEEDS_HUMAN`) | ok `mode=background` | P1 (M4) |
 | `clipboard` | `op` (get/set), `text?` | text | P1 (M2) |
-| `batch` | `steps[]` of the above (trusted input), `stop_on_error?` | per-step results | P2 |
+| `batch` | `steps[]` (≤ 50) of `{tool, args}`: input, window and read tools; each step passes the policy; `stop_on_error?` (default true) | one line per step | P2 (M1) |
 
 ## Flow control & human in the loop
 
@@ -72,7 +72,7 @@ Stop) every call returns `STOPPED` until the user resumes from the tray; there i
 
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
-| `wait_for` | `window?`, `ref_gone?`, `text_contains?`, `window_title?`, `idle_ms?` | ok / TIMEOUT | P1 |
+| `wait_for` | `window?`, `window_title?`, `text_contains?`, `ref_gone?`, `window_gone?`, `idle_ms?`, `timeout_ms?` (default 10 s, max 120 s); all given conditions at once | met conditions (+ window ref) / `TIMEOUT` | P2 (M1; was P1, not built in Phase 1) |
 | `ask_human` | `message`, `kind` (confirm/choice/info/task), `options?` (choice: 2–5), `timeout_ms?` (default 120 s) | answer (`yes`/`no`/option/`ok`); `task` → `request_id` at once | P1 (M5) |
 | `wait_for_human` | `request_id`, `timeout_ms?` | `done` / `denied` (else `TIMEOUT`) | P1 (M5) |
 | `status` | — | running/stopped, paired client, kill hotkey, policy file (M5) | P1 |

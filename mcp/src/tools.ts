@@ -5,6 +5,7 @@
 // background first (no cursor, no keys); real input waits for the user to be idle.
 // M5 (ADR 0017): ask_human, wait_for_human; every action passes the core's policy engine and
 // kill switch (BLOCKED_BY_POLICY, STOPPED — only the user resumes, from the tray).
+// P2-M1 (ADR 0022): wait_for, batch, observe(scope_ref) — fewer agent round trips.
 // Coordinates are physical screen pixels; `window` is a ref like "w460650" or the integer handle.
 import type { CoreClient } from './core-client.ts';
 
@@ -193,6 +194,7 @@ export const TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         window: WINDOW_REQ,
+        scope_ref: { ...REF, description: 'Only this element\'s subtree (a list, pane or dialog): fewer tokens on big windows' },
         full: { type: 'boolean', description: 'Full list instead of a diff' },
         max_elements: { type: 'integer', minimum: 1, maximum: 500, description: 'Default 120' },
       },
@@ -272,6 +274,65 @@ export const TOOLS: ToolDef[] = [
       additionalProperties: false,
     },
     run: forward('set_value', (r, a) => `ok set ${a.ref} (${r.chars} chars)${how(r)}`),
+  },
+  {
+    name: 'wait_for',
+    description:
+      'Waits in the core (no polling from you) until ALL given conditions hold: window_title contains text ' +
+      '(without window: any window → its ref), text_contains (visible text or terminal/editor text of the ' +
+      'window), ref_gone, window_gone, idle_ms (window unchanged that long). timeout_ms default 10 s → TIMEOUT.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        window: WINDOW_REQ,
+        window_title: { type: 'string', minLength: 1 },
+        text_contains: { type: 'string', minLength: 1 },
+        ref_gone: REF,
+        window_gone: { type: 'boolean' },
+        idle_ms: { type: 'integer', minimum: 50, maximum: 60000 },
+        timeout_ms: { type: 'integer', minimum: 100, maximum: 120000 },
+      },
+      additionalProperties: false,
+    },
+    run: forward('wait_for', (r) => `ok ${r.met.join(' + ')} after ${r.ms} ms${r.window ? ' · ' + r.window : ''}`),
+  },
+  {
+    name: 'batch',
+    description:
+      'Runs up to 50 steps in one call, without a round trip per step: [{tool, args}] with tools click, type, ' +
+      'press_keys, scroll, drag, mouse, set_value, clipboard, focus_window, window_bounds, launch_app, ' +
+      'close_window, wait_for, observe, find, read_text. Every step still passes the safety policy (approval ' +
+      'dialogs, blocks) and the kill switch. Stops at the first error unless stop_on_error=false. Use it for ' +
+      'known sequences (e.g. clicks by refs from one observe, then wait_for).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: 'object',
+            properties: { tool: { type: 'string' }, args: { type: 'object' } },
+            required: ['tool'],
+            additionalProperties: false,
+          },
+        },
+        stop_on_error: { type: 'boolean', description: 'Default true' },
+      },
+      required: ['steps'],
+      additionalProperties: false,
+    },
+    run: forward('batch', (r) => {
+      const lines = (r.steps as any[]).map((s) => {
+        if (s.skipped) return `${s.step}. ${s.tool}: skipped`;
+        if (!s.ok) return `${s.step}. ${s.tool}: ERROR ${s.error.code}: ${s.error.message}`;
+        const v = s.result ?? {};
+        const body = typeof v.text === 'string' ? `\n${v.text}` : v.met ? ` ${v.met.join(' + ')}` : v.mode ? ` · ${v.mode}` : '';
+        return `${s.step}. ${s.tool}: ok${body}`;
+      });
+      return `${r.ok ? 'ok' : 'stopped'} batch ${r.completed}/${r.total}\n${lines.join('\n')}`;
+    }),
   },
   {
     name: 'ask_human',

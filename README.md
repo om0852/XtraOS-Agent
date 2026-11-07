@@ -5,8 +5,9 @@ A local **AI action runtime**: the bridge that lets any AI model see and operate
 The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 
 > Status: **Phase 1 complete — Release 0.1 (unsigned developer preview)**, M1–M6 closed
-> (ADRs 0009–0020). Open: code signing and a fresh-machine test with Smart App Control on.
-> Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1`
+> (ADRs 0009–0020); **Phase 2: P2-M1 closed** (wait_for, batch, scoped observe; ADR 0023),
+> next P2-M2 OCR. Open: code signing and a fresh-machine test with Smart App Control on.
+> Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1`, `tests/phase2/p2m1-gate.ps1`
 > (`-Interactive` moves the mouse and types; keep hands off).
 
 ## Install (Release 0.1)
@@ -61,6 +62,8 @@ Recorded flows: [docs/flows](docs/flows/README.md) · Bench: [docs/bench/release
 | Ask the user: `ask_human` (yes/no, choice, info, task) + `wait_for_human` | verified — M5 gate |
 | One-zip per-user install, MCP starts the core on demand, clean uninstall (install → working in 6–13 s) | verified — M6 gate (ADR 0020) |
 | Flows F2, F3, F4, F6, F10 driven through MCP on the release build | verified — M6 gate ([docs/flows](docs/flows/README.md)) |
+| `wait_for` (title, text, element/window gone, idle) in the core; `batch` of up to 50 steps, each step still policy-checked; `observe(scope_ref)` | verified — P2-M1 gate (ADR 0023) |
+| Routine task in ≤ 3 calls / ≤ 2,000 tokens (Calculator 7 + 5: 3 calls, ~335 tokens) | verified — P2-M1 gate ([R1](docs/flows/R1.md)) |
 | Code-signed binaries (Smart App Control on) | not yet (owner decision, ADR 0019) |
 | Fast observe on windows with hundreds of list items | not yet (Phase 2; 222 ms measured vs 120 ms budget) |
 | OCR | not yet (Phase 2) |

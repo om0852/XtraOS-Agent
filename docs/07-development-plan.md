@@ -13,7 +13,8 @@ PASS, 0 SKIP; large-list observe latency is a stated miss (Phase 2). **M5 Safety
 (ADRs 0017, 0018) — kill switch 15 ms, policy + approvals, overlay; safety e2e 6/6.
 **M6 Release 0.1: closed as an unsigned developer preview** (ADRs 0019, 0020) — install
 test 12/12, flows F2/F3/F4/F6/F10 recorded, bench report; open: signing + fresh SAC-on test.
-**Phase 1 complete. Next: Phase 2 (Smart & cheap)** — start only when the owner says so. Only work on the current phase (see CLAUDE.md §3).
+**Phase 1 complete.** Phase 2 started 2026-11-07 (owner: "continue"); note: `wait_for` from the P1 contract was
+not built in Phase 1 and is the first item of P2-M1. Only work on the current phase (see CLAUDE.md §3).
 Each milestone has exit criteria; a milestone is done only when all are met and evidenced.
 
 ## Phase 0 — Spikes & skeleton (≈ 1 week)
@@ -57,6 +58,12 @@ Element-ref hardening, trusted `batch`, local OCR, app map (DPAPI), skills engin
 skills (WhatsApp desktop/web send file, Telegram send, Explorer file ops), elevated helper,
 browser driver bridge to XtraDevPilot, MSI packaging.
 Exit: F5 and F7 pass; routine task ≤ 3 calls / ≤ 2,000 tokens in bench.
+
+Milestones (ADR 0021): P2-M1 fewer calls (`wait_for`, scoped observe, trusted `batch`) ·
+P2-M2 OCR · P2-M3 app map + skills engine (Explorer file ops) · P2-M4 messaging skills (F7, in
+an owner-chosen test chat) · P2-M5 elevated helper (F5) · P2-M6 browser bridge + packaging.
+**P2-M1 Fewer calls: closed** (ADRs 0022, 0023) — gate 13/13; routine task 3 calls / ~335 tokens.
+**Current: P2-M2 OCR.**
 
 ## Phase 3 — Reach
 

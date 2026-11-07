@@ -193,6 +193,29 @@ async function F6(f) {
   if (x.isError) await f.call('close_window', { window: tw }, 'close the terminal instead');
 }
 
+// P2-BENCH-01 (ADR 0022): a routine task in ≤ 3 calls / ≤ 2,000 tokens with wait_for + batch.
+async function R1(f) {
+  const l = await f.call('launch_app', { app: 'calc' }, 'call 1: open Calculator');
+  const w = winRef(l.text);
+  const o = await f.call('batch', { steps: [
+    { tool: 'wait_for', args: { window: w, idle_ms: 400 } },
+    { tool: 'observe', args: { window: w, full: true } },
+  ] }, 'call 2: wait until it settled, read it (refs)');
+  const ref = (n) => firstRef(o.text, new RegExp(`^e\\d+ Button "${n}"`));
+  const keys = ['Clear', 'Seven', 'Plus', 'Five', 'Equals'].map(ref);
+  if (!f.expect(keys.every(Boolean), 'all buttons found')) return;
+  const b = await f.call('batch', { steps: [
+    ...keys.map((r) => ({ tool: 'click', args: { ref: r } })),
+    { tool: 'wait_for', args: { window: w, text_contains: 'Display is 12' } },
+    { tool: 'close_window', args: { window: w } },
+  ] }, 'call 3: press 7 + 5 =, wait for 12, close');
+  f.expect(b.text.startsWith('ok batch 7/7'), 'all steps ok and the display showed 12');
+  const calls = f.steps.length;
+  const tok = f.steps.reduce((a, s) => a + s.tok, 0);
+  f.note(`Routine task budget (docs/06): ${calls} calls (≤ 3), ~${tok} result tokens (≤ 2,000).`);
+  f.expect(calls <= 3 && tok <= 2000, 'within ≤ 3 calls and ≤ 2,000 tokens');
+}
+
 async function F10(f) {
   const exe = path.join(root, 'testbed', 'bin', 'testbed.exe');
   const l = await f.call('launch_app', { app: exe, args: ['200', '160'] }, 'drawing surface (testbed)');
@@ -229,6 +252,7 @@ const FLOWS = {
   F4: ['Drag a file from Explorer onto a web page drop zone (refs)', F4],
   F6: ['Terminal: run a command and read its output', F6],
   F10: ['Kill switch during a long drag, then the user resumes', F10],
+  R1: ['Routine task in ≤ 3 calls: Calculator 7 + 5 with wait_for + batch (P2-BENCH-01)', R1],
 };
 
 const pick = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(FLOWS);

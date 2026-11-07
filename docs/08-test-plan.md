@@ -131,9 +131,23 @@ row says "SKIP allowed".
 
 ---
 
-## Phase 2+ gates
-Defined when the phase starts (CLAUDE.md §3); each new tool brings its own test cases here
-before implementation.
+## Phase 2 gates
+Each milestone adds its cases here before implementation (CLAUDE.md §3).
+
+### P2-M1 Fewer calls (ADR 0022)
+| ID | Test case | Expected |
+|---|---|---|
+| P2-WF-01 | `wait_for(window_title)` after launching an app (no `window`) | met with the new window's ref |
+| P2-WF-02 | `wait_for(text_contains)` after a background click changes the display | met within one poll interval |
+| P2-WF-03 | `wait_for(window_gone)` / `wait_for(ref_gone)` when the window closes | met |
+| P2-WF-04 | `wait_for(idle_ms)` on a static window | met after ≈ idle_ms |
+| P2-WF-05 | Unmet condition with `timeout_ms` 1000 | `TIMEOUT` naming the condition, ≈ 1 s |
+| P2-OBS-01 | `observe(scope_ref = list)` | only that subtree; fewer tokens than the full window |
+| P2-BA-01 | `batch` of 4 Calculator clicks + `wait_for` text | one call, all steps ok, display right |
+| P2-BA-02 | `batch` containing a "Send" click | confirm dialog for that step; deny → `BLOCKED_BY_POLICY`, rest skipped, nothing sent |
+| P2-BA-03 | Kill switch during a batch | `STOPPED`, remaining steps skipped, nothing stuck |
+| P2-BA-04 | Nested batch / ask_human / unknown tool in steps | `INVALID_ARGS`, nothing executed |
+| P2-BENCH-01 | Routine task (Calculator 7 + 5) via MCP on the release build | ≤ 3 calls, ≤ 2,000 tokens |
 
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).

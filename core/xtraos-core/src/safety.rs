@@ -209,7 +209,9 @@ pub struct Approval {
     pub policy_note: Option<String>,
 }
 
-const HITL_METHODS: &[&str] = &["ask_human", "wait_for_human"];
+/// Not checked as one action here: human questions, and `batch` (each step is authorised
+/// on its own in exec::batch).
+const HITL_METHODS: &[&str] = &["ask_human", "wait_for_human", "batch"];
 
 fn window_facts(h: HWND) -> (String, String) {
     (

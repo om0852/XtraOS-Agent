@@ -1,14 +1,14 @@
 # Bench — Release 0.1 (P1-REL-04)
 
-Recorded 2026-11-07T08:54:18.574Z by tests/bench/bench.mjs: release `xtraos-core.exe` over its real named pipe, Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz, 8 threads, Windows build 10.0.26200. Budgets from docs/06.
+Recorded 2026-11-07T10:17:04.260Z by tests/bench/bench.mjs: release `xtraos-core.exe` over its real named pipe, Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz, 8 threads, Windows build 10.0.26200. Budgets from docs/06.
 
 | Operation | p50 | p95 | Budget p50 / p95 | Result | Note |
 |---|---|---|---|---|---|
-| Pipe round trip (status) | 0.2 ms | 0.4 ms | 2 / 10 ms | met |  |
-| observe Calculator (39 el., full) | 82.2 ms | 165.6 ms | 120 / 400 ms | met | ~254 tokens |
-| click(ref) background (Calculator "Clear") | 9.0 ms | 15.2 ms | 80 / 200 ms | met |  |
-| screenshot window @0.5 | 63.8 ms | 92.7 ms | 60 / 150 ms | **missed** | 242x401 PNG 18 KB |
-| type 50 chars (unicode), until the app has it | 715.1 ms | 1293.7 ms | 150 / 400 ms | **missed** | WinForms testbed field; read back exactly after every call |
+| Pipe round trip (status) | 0.1 ms | 0.2 ms | 2 / 10 ms | met |  |
+| observe Calculator (39 el., full) | 28.5 ms | 30.2 ms | 120 / 400 ms | met | ~254 tokens |
+| click(ref) background (Calculator "Clear") | 5.0 ms | 6.4 ms | 80 / 200 ms | met |  |
+| screenshot window @0.5 | 16.8 ms | 32.1 ms | 60 / 150 ms | met | 242x401 PNG 18 KB |
+| type 50 chars (unicode), until the app has it | 286.7 ms | 294.3 ms | 150 / 400 ms | **missed** | WinForms testbed field; read back exactly after every call |
 | Kill switch → input halted | — | 15 ms | — / 100 ms | met | measured in the M5 gate (ADR 0018) |
 
 Typed text read back exactly: yes.

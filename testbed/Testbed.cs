@@ -8,6 +8,8 @@
 //   state  -> {"clicks":{...},"pad":[...],"text":"...","multi":"...","passwordLen":N,
 //              "listTop":N,"dropped":"...","path":{...},"keys":[...]}
 //   reset  -> {"ok":true}        quit -> {"ok":true} and exits
+//   fillpassword -> puts a known secret in the password box (M4 masking test, no typing)
+// "--opaque": a single custom-painted surface with no accessible controls (M4 opaque test).
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -31,15 +33,15 @@ static class Program
         Application.EnableVisualStyles();
         int x = args.Length > 0 ? int.Parse(args[0]) : 120;
         int y = args.Length > 1 ? int.Parse(args[1]) : 120;
-        var form = new Testbed(new Point(x, y));
+        Form form = Array.IndexOf(args, "--opaque") >= 0 ? (Form)new OpaqueForm(new Point(x, y)) : new Testbed(new Point(x, y));
         // The stdin control channel is opt-in via "--control" (the test harness passes it).
         // Without it (e.g. started by launch_app via ShellExecute) behave like a normal app and
         // stay open until closed (ADR 0012). Console.IsInputRedirected is NOT usable here: in a
         // winexe with no console the missing stdin handle counts as "redirected", ReadLine
         // returns null at once and the window would close immediately (found by win01).
         bool controlled = Array.IndexOf(args, "--control") >= 0;
-        var reader = new Thread(() => ReadLoop(form)) { IsBackground = true };
-        form.Shown += delegate { if (controlled) { reader.Start(); Out("{\"ready\":true}"); } };
+        var reader = new Thread(() => ReadLoop(form as Testbed)) { IsBackground = true };
+        form.Shown += delegate { if (controlled && form is Testbed) { reader.Start(); Out("{\"ready\":true}"); } };
         Application.Run(form);
     }
 
@@ -121,8 +123,16 @@ class Testbed : Form
         Reg("dragSource", dragSource);
 
         dropTarget = new Panel { Location = new Point(200, 255), Size = new Size(180, 70), BackColor = Color.Honeydew, AllowDrop = true };
-        dropTarget.DragEnter += (s, e) => { e.Effect = e.Data.GetDataPresent(DataFormats.Text) ? DragDropEffects.Copy : DragDropEffects.None; };
-        dropTarget.DragDrop += (s, e) => { dropped = (string)e.Data.GetData(DataFormats.Text); };
+        dropTarget.DragEnter += (s, e) => { e.Effect = e.Data.GetDataPresent(DataFormats.Text) || e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; };
+        dropTarget.DragDrop += (s, e) =>
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                var files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                dropped = "file:" + System.IO.Path.GetFileName(files[0]);
+            }
+            else dropped = (string)e.Data.GetData(DataFormats.Text);
+        };
         Reg("dropTarget", dropTarget);
 
         drawPad = new Panel { Location = new Point(20, 345), Size = new Size(360, 110), BackColor = Color.MistyRose };
@@ -143,7 +153,8 @@ class Testbed : Form
         };
     }
 
-    void Reg(string name, Control c) { named[name] = c; Controls.Add(c); }
+    // AccessibleName = the control's test name, so UI Automation shows e.g. Edit "text" (M4).
+    void Reg(string name, Control c) { c.AccessibleName = name; named[name] = c; Controls.Add(c); }
 
     public string Command(string cmd)
     {
@@ -152,6 +163,7 @@ class Testbed : Form
             case "rects": return Rects();
             case "state": return State();
             case "reset": Reset(); return "{\"ok\":true}";
+            case "fillpassword": password.Text = "hunter2-secret"; return "{\"ok\":true}";
             case "quit": return "{\"ok\":true}";
             default: return "{\"error\":\"unknown command\"}";
         }
@@ -228,5 +240,26 @@ class Testbed : Form
             }
         }
         return sb.Append('"').ToString();
+    }
+}
+
+// A window whose content is drawn by hand: UI Automation sees no controls inside (like canvas
+// apps, games and some Electron apps).
+class OpaqueForm : Form
+{
+    public OpaqueForm(Point location)
+    {
+        AutoScaleMode = AutoScaleMode.None;
+        StartPosition = FormStartPosition.Manual;
+        Location = location;
+        Size = new Size(640, 420);
+        Text = "XtraOS Opaque";
+        BackColor = Color.White;
+        Paint += (s, e) =>
+        {
+            e.Graphics.FillRectangle(Brushes.MediumSeaGreen, 40, 40, 200, 80);
+            e.Graphics.FillEllipse(Brushes.Coral, 300, 60, 120, 120);
+            e.Graphics.DrawString("canvas only", Font, Brushes.Black, 40, 140);
+        };
     }
 }

@@ -1,6 +1,6 @@
 # ADR 0014 — Non-interference: background-first actions, polite real input
 
-- Status: proposed (owner decision pending; evidence from spike S10)
+- Status: accepted 2026-11-07 (owner: "Yes, start M4"); implemented in M4 (ADR 0015)
 - Date: 2026-11-07
 
 ## Context
@@ -42,7 +42,7 @@ Calculator driven only through UIA: Invoke `C, 7, 8, +, 4, =`, read the display,
 Not yet proven: that UIA Invoke generates no input event at all (`GetLastInputInfo` changed in
 every run, but the user was active) — re-check in a hands-off run in M4.
 
-## Decision (proposed)
+## Decision
 An **action ladder**; every action result says which rung was used: `mode: background | input`.
 
 1. **Background (default when a `ref` target supports it).** `click(ref)` → Invoke / Toggle /
@@ -53,15 +53,15 @@ An **action ladder**; every action result says which rung was used: `mode: backg
    - wait until the user has been idle ≥ `idle_ms` (default 1,000 ms, `GetLastInputInfo`), up to
      `timeout_ms`, else `USER_ACTIVE` with hint "user is working; retry or ask_human";
    - one short burst; existing M2 guards still abort on user activity;
-   - afterwards restore the cursor position and the previously focused window (`restore: true`
-     default; off for flows that must leave focus in the target, e.g. typing into a chat).
+   - afterwards put the cursor back (`restore_cursor: true` default). Keyboard focus stays in
+     the clicked window on purpose (click → type flows); see ADR 0015 §8.
 3. Never: hidden desktops, input to a desktop the user cannot see (CLAUDE.md §4).
 
 Cost/perf: background actions skip focus + move + arrival waits, so they are also faster and
 need no screenshot to aim. Target ≤ 30 ms per pattern call with native UIA + CacheRequest.
 
 ## Consequences (on acceptance)
-- docs/04: `click`/`scroll` gain `ref` + `mode` in results; `idle_ms`, `restore` on real-input
+- docs/04: `click`/`scroll` gain `ref` + `mode` in results; `idle_ms`, `restore_cursor` on real-input
   tools. docs/08: new cases P1-BG-01..05 (Invoke without cursor move or key event, Value on
   WinForms + XAML + browser, foreground restore, idle-wait refusal, cursor/focus restore).
 - M4 = perception (refs) + background actions, since actions need refs.

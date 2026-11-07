@@ -68,7 +68,7 @@ row says "SKIP allowed".
 | P1-IN-04 | `press_keys` chords (Ctrl+A, Ctrl+C, Alt+Tab disallowed in test) | testbed reports chords |
 | P1-IN-05 | `scroll` dy=±3 on list | first visible item changes as expected |
 | P1-IN-06 | `drag` within testbed (slider, reorder) | final state matches |
-| P1-IN-07 | `drag` Explorer file → testbed HTML drop zone (from S4) | file name received |
+| P1-IN-07 | `drag` Explorer file (located via `observe`) → testbed drop zone | file name received |
 | P1-IN-08 | `set_value` via ValuePattern (no typing) | value set, no key events |
 | P1-IN-09 | Keyboard refused when target not foreground | `NEEDS_HUMAN`/error, no keys sent |
 | P1-IN-10 | Guard: user moves mouse mid-action | action aborted, nothing clicked |
@@ -96,6 +96,16 @@ row says "SKIP allowed".
 | P1-PER-05 | Stale ref after window change | `STALE_REF`, re-observe works |
 | P1-PER-06 | Latency `observe` ≤ 120 ms p50 (CacheRequest) | bench result |
 | P1-PER-07 | Password field values never returned | masked |
+
+### M4 Background-first actions (ADRs 0014, 0015)
+| ID | Test case | Expected |
+|---|---|---|
+| P1-BG-01 | `click(ref)` on Calculator 7 8 + 4 = | display 82, `mode=background`, cursor unchanged, 0 injected events |
+| P1-BG-02 | `click(ref)` on testbed buttons (WinForms via native UIA) | counters match, `mode=background` |
+| P1-BG-03 | Provider activates its window on Invoke | foreground handed back to the previous window |
+| P1-BG-04 | Real input while the user is active (simulated) | waits, then `USER_ACTIVE`; nothing clicked |
+| P1-BG-05 | Real click with `restore_cursor` | cursor back at its start point |
+| P1-BG-06 | `scroll(ref)` on a list item | item scrolled into view, `mode=background` |
 
 ### M5 Safety
 | ID | Test case | Expected |

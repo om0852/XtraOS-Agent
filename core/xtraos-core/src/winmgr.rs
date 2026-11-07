@@ -206,13 +206,13 @@ pub fn resolve_window(v: &Value) -> Result<HWND, ActError> {
 // ---------------------------------------------------------------------------------------------
 // Process facts
 
-fn pid_of(h: HWND) -> u32 {
+pub fn pid_of(h: HWND) -> u32 {
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(h, &mut pid) };
     pid
 }
 
-fn process_name(pid: u32) -> String {
+pub fn process_name(pid: u32) -> String {
     unsafe {
         let p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if p.is_null() {
@@ -293,6 +293,21 @@ fn own_integrity() -> u32 {
 
 /// True if the window's process runs at a higher integrity level than the core, or its token
 /// is unreadable (conservative: we must not try to drive it; UIPI would drop input silently).
+pub fn exists(h: HWND) -> bool {
+    !h.is_null() && unsafe { IsWindow(h) } != 0
+}
+
+pub fn is_minimized(h: HWND) -> bool {
+    unsafe { IsIconic(h) != 0 }
+}
+
+/// Full window rectangle including invisible resize borders (see `frame` for the visible one).
+pub fn window_rect(h: HWND) -> RECT {
+    let mut r = RECT::default();
+    unsafe { GetWindowRect(h, &mut r) };
+    r
+}
+
 pub fn is_elevated(h: HWND) -> bool {
     let pid = pid_of(h);
     if pid == 0 || pid == std::process::id() {
@@ -315,7 +330,7 @@ pub fn is_elevated(h: HWND) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Window facts
 
-fn title(h: HWND) -> String {
+pub fn title(h: HWND) -> String {
     unsafe {
         let n = GetWindowTextLengthW(h);
         if n <= 0 {
@@ -402,7 +417,7 @@ fn describe(h: HWND, fg: HWND) -> Value {
     })
 }
 
-fn foreground_root() -> HWND {
+pub fn foreground_root() -> HWND {
     let fg = unsafe { GetForegroundWindow() };
     if fg.is_null() {
         fg
@@ -424,6 +439,7 @@ pub const METHODS: &[&str] = &[
 
 pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
     crate::input::init_dpi();
+    crate::input::next_action();
     match method {
         "list_windows" => list_windows(p),
         "focus_window" => focus_window(p),

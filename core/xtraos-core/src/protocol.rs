@@ -16,16 +16,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Methods from docs/04-mcp-tool-contract.md that exist on paper but not yet in the core.
-const PLANNED_METHODS: &[&str] = &[
-    "observe",
-    "screenshot",
-    "read_text",
-    "find",
-    "set_value",
-    "wait_for",
-    "ask_human",
-    "wait_for_human",
-];
+const PLANNED_METHODS: &[&str] = &["wait_for", "ask_human", "wait_for_human"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
@@ -230,7 +221,10 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
             method,
         ),
         "pair" => invalid(&id, "already paired", &method),
-        m if crate::input::METHODS.contains(&m) || crate::winmgr::METHODS.contains(&m) => {
+        m if crate::input::METHODS.contains(&m)
+            || crate::winmgr::METHODS.contains(&m)
+            || crate::perceive::METHODS.contains(&m) =>
+        {
             let params = if params.is_null() { json!({}) } else { params };
             if !params.is_object() {
                 return invalid(&id, "params must be an object", &method);
@@ -366,7 +360,7 @@ mod tests {
         );
         let (o, info) = handle_line(
             &mut conn,
-            r#"{"jsonrpc":"2.0","id":2,"method":"observe","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"wait_for","params":{}}"#,
             &c,
         );
         assert_eq!(code(&o).as_deref(), Some("NOT_IMPLEMENTED"));

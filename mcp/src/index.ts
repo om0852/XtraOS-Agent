@@ -30,7 +30,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const extra = Object.keys(args).filter((k) => !(k in tool.inputSchema.properties));
   if (extra.length) return errorResult('INVALID_ARGS', `unexpected argument(s): ${extra.join(', ')}`, 'See the tool schema.');
   try {
-    return { content: [{ type: 'text' as const, text: await tool.run(core, args) }] };
+    const out = await tool.run(core, args);
+    return { content: typeof out === 'string' ? [{ type: 'text' as const, text: out }] : out };
   } catch (e) {
     if (e instanceof CoreError) return errorResult(e.code, e.message, e.hint);
     return errorResult('INTERNAL', e instanceof Error ? e.message : String(e), '');

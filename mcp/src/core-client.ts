@@ -49,7 +49,10 @@ export class CoreClient {
 
   async call(method: string, params?: Record<string, unknown>): Promise<unknown> {
     await this.ensureConnected();
-    return this.send(method, params);
+    // A call may legitimately take up to its own timeout_ms (waiting for the user to be idle,
+    // waiting for a launched window); allow that plus a margin.
+    const t = typeof params?.timeout_ms === 'number' ? params.timeout_ms + 5_000 : 0;
+    return this.send(method, params, Math.max(this.timeoutMs, t));
   }
 
   close(): void {
@@ -91,15 +94,15 @@ export class CoreClient {
     }
   }
 
-  private send(method: string, params?: Record<string, unknown>): Promise<unknown> {
+  private send(method: string, params?: Record<string, unknown>, timeoutMs = this.timeoutMs): Promise<unknown> {
     const sock = this.sock;
     if (!sock) return Promise.reject(new CoreError('NOT_PAIRED', 'not connected to XtraOS core', HINT_START_CORE));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new CoreError('TIMEOUT', `core did not answer '${method}' within ${this.timeoutMs} ms`, 'Retry; check the core is responsive.'));
-      }, this.timeoutMs);
+        reject(new CoreError('TIMEOUT', `core did not answer '${method}' within ${timeoutMs} ms`, 'Retry; check the core is responsive.'));
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       const msg: Record<string, unknown> = { jsonrpc: '2.0', id, method };
       if (params !== undefined) msg.params = params;

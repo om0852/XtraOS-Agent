@@ -8,6 +8,9 @@
 //! - keyboard needs `window` and it must be the foreground window before every key;
 //! - pressed modifiers / buttons are released on every exit path (Drop guards).
 //!
+//! M4 (ADRs 0014, 0015): `ref` targets act in the background first (perceive.rs). Real input is
+//! polite: it waits until the user has been idle `idle_ms`, and mouse tools put the cursor back.
+//!
 //! Win32 docs:
 //! SendInput  https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-sendinput
 //! MOUSEINPUT https://learn.microsoft.com/windows/win32/api/winuser/ns-winuser-mouseinput
@@ -16,7 +19,8 @@
 #![allow(non_snake_case, clippy::upper_case_acronyms)]
 
 use std::ffi::c_void;
-use std::sync::{Mutex, Once};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard, Once};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -122,6 +126,13 @@ extern "system" {
     fn EmptyClipboard() -> i32;
     fn GetClipboardData(format: u32) -> *mut c_void;
     fn SetClipboardData(format: u32, mem: *mut c_void) -> *mut c_void;
+    fn GetLastInputInfo(info: *mut LASTINPUTINFO) -> i32;
+}
+
+#[repr(C)]
+struct LASTINPUTINFO {
+    cbSize: u32,
+    dwTime: u32,
 }
 
 #[link(name = "kernel32")]
@@ -130,6 +141,7 @@ extern "system" {
     fn GlobalLock(mem: *mut c_void) -> *mut c_void;
     fn GlobalUnlock(mem: *mut c_void) -> i32;
     fn GlobalFree(mem: *mut c_void) -> *mut c_void;
+    fn GetTickCount() -> u32;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -171,6 +183,33 @@ fn user_active(what: &str) -> ActError {
 
 static DPI: Once = Once::new();
 static ACTION_LOCK: Mutex<()> = Mutex::new(());
+/// Tick (GetTickCount) right after our last SendInput; 0 = never.
+static LAST_INJECT: AtomicU32 = AtomicU32::new(0);
+
+/// Counts OS actions; a background watcher stops as soon as any newer action starts.
+static ACTION_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// One OS action at a time, process-wide (input and background actions share it).
+pub fn action_lock() -> MutexGuard<'static, ()> {
+    let g = ACTION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    next_action();
+    g
+}
+
+/// Marks the start of an OS action; returns its generation.
+pub fn next_action() -> u64 {
+    ACTION_GEN.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+pub fn action_generation() -> u64 {
+    ACTION_GEN.load(Ordering::SeqCst)
+}
+
+/// Tick of the core's last injected input event (0 = never). Lets tests prove that a
+/// background action injected nothing.
+pub fn last_inject_tick() -> u32 {
+    LAST_INJECT.load(Ordering::Relaxed)
+}
 
 /// Per-monitor DPI aware v2 for the whole process: all coordinates are physical pixels.
 pub fn init_dpi() {
@@ -187,6 +226,7 @@ fn send(inputs: &[INPUT]) -> Result<(), ActError> {
             std::mem::size_of::<INPUT>() as i32,
         )
     };
+    LAST_INJECT.store(unsafe { GetTickCount() }.max(1), Ordering::Relaxed);
     if n as usize != inputs.len() {
         return Err(err(
             "INTERNAL",
@@ -298,6 +338,84 @@ impl Button {
             Button::Right => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
             Button::Middle => (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Politeness (ADR 0014): wait for the user to be idle; put the cursor back afterwards.
+
+/// Classifies the newest input event: `None` = it was our own injection (the user has not
+/// touched anything since), else `Some(ms since the user's last input)`. Pure for testing.
+pub fn user_idle(now: u32, last_input: u32, last_inject: u32) -> Option<u32> {
+    // Our own SendInput updates GetLastInputInfo too; events up to 50 ms after our last
+    // injection are attributed to it (the OS stamps them slightly later).
+    if last_inject != 0 && (last_input.wrapping_sub(last_inject) as i32) <= 50 {
+        return None;
+    }
+    Some(now.wrapping_sub(last_input))
+}
+
+fn last_input_tick() -> u32 {
+    let mut i = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    unsafe { GetLastInputInfo(&mut i) };
+    i.dwTime
+}
+
+/// Options shared by every real-input tool.
+#[derive(Clone, Copy, Debug)]
+pub struct Polite {
+    pub idle_ms: u32,
+    pub timeout_ms: u32,
+    pub restore_cursor: bool,
+}
+
+pub fn polite_args(p: &Value, restore_default: bool) -> Result<Polite, ActError> {
+    Ok(Polite {
+        idle_ms: opt_int(p, "idle_ms", 800, 0, 60_000)? as u32,
+        timeout_ms: opt_int(p, "timeout_ms", 5_000, 0, 120_000)? as u32,
+        restore_cursor: match p.get("restore_cursor") {
+            None | Some(Value::Null) => restore_default,
+            Some(v) => v
+                .as_bool()
+                .ok_or_else(|| bad("'restore_cursor' must be true or false"))?,
+        },
+    })
+}
+
+/// Waits (at most timeout_ms) until the user has been idle for `idle_ms`; else USER_ACTIVE.
+pub fn wait_user_idle(o: &Polite) -> Result<(), ActError> {
+    if o.idle_ms == 0 {
+        return Ok(());
+    }
+    let start = unsafe { GetTickCount() };
+    loop {
+        let now = unsafe { GetTickCount() };
+        match user_idle(now, last_input_tick(), LAST_INJECT.load(Ordering::Relaxed)) {
+            None => return Ok(()),
+            Some(ms) if ms >= o.idle_ms => return Ok(()),
+            Some(ms) => {
+                if now.wrapping_sub(start) >= o.timeout_ms {
+                    return Err(err(
+                        "USER_ACTIVE",
+                        format!("the user is working (last input {ms} ms ago); nothing was sent"),
+                        "Retry later, use a ref (background, no mouse/keys), or ask_human.",
+                    ));
+                }
+                sleep(Duration::from_millis(u64::from(
+                    (o.idle_ms - ms).clamp(10, 50),
+                )));
+            }
+        }
+    }
+}
+
+/// Puts the cursor back where the user left it, unless the user has moved it since.
+fn restore_cursor(o: &Polite, start: POINT, g: &MouseGuard) {
+    if o.restore_cursor && !g.user_moved() && cursor() != start && on_desktop(start).is_ok() {
+        let _ = move_abs(start);
     }
 }
 
@@ -696,7 +814,7 @@ pub const METHODS: &[&str] = &[
 /// Runs one input method. Blocking; call from a blocking thread. Serialised process-wide.
 pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
     init_dpi();
-    let _one_at_a_time = ACTION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _one_at_a_time = action_lock();
     match method {
         "click" => click(p),
         "mouse" => mouse_action(p),
@@ -710,29 +828,57 @@ pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
 }
 
 fn click(p: &Value) -> Result<Value, ActError> {
-    let pt = point(p, "x", "y")?;
-    let window = window_arg(p, "window", false)?;
     let button = button_arg(p)?;
     let clicks = opt_int(p, "clicks", 1, 1, 3)?;
     let mods = modifiers_arg(p)?;
+    let o = polite_args(p, true)?;
+    if let Some(r) = p.get("ref").filter(|v| !v.is_null()) {
+        let t = crate::perceive::resolve(r)?;
+        // A plain left click is done through the element itself (no cursor, no keys).
+        if button == Button::Left && clicks == 1 && mods.is_empty() {
+            if let Some(v) = crate::perceive::click_background(&t)? {
+                return Ok(v);
+            }
+        }
+        let pt = t.center()?;
+        return click_at(pt, Some(t.window), button, clicks, &mods, &o);
+    }
+    let pt = point(p, "x", "y")?;
+    let window = window_arg(p, "window", false)?;
+    click_at(pt, window, button, clicks, &mods, &o)
+}
+
+fn click_at(
+    pt: POINT,
+    window: Option<HWND>,
+    button: Button,
+    clicks: i64,
+    mods: &[u16],
+    o: &Polite,
+) -> Result<Value, ActError> {
+    wait_user_idle(o)?;
     if modifiers_held() {
         return Err(user_active("a modifier key is held"));
     }
+    let start = cursor();
     let mut g = MouseGuard::begin(window)?;
     g.check_target(pt, None)?;
     g.move_to(pt)?;
-    let _mods = ModHold::press(&mods)?;
-    let (down, up) = button.flags();
-    for i in 0..clicks {
-        g.before_button(pt, None)?;
-        send(&[mouse(down, 0, 0, 0)])?;
-        sleep(Duration::from_millis(12));
-        send(&[mouse(up, 0, 0, 0)])?;
-        if i + 1 < clicks {
-            sleep(Duration::from_millis(40));
+    {
+        let _mods = ModHold::press(mods)?;
+        let (down, up) = button.flags();
+        for i in 0..clicks {
+            g.before_button(pt, None)?;
+            send(&[mouse(down, 0, 0, 0)])?;
+            sleep(Duration::from_millis(12));
+            send(&[mouse(up, 0, 0, 0)])?;
+            if i + 1 < clicks {
+                sleep(Duration::from_millis(40));
+            }
         }
     }
-    Ok(json!({"at": [pt.x, pt.y], "clicks": clicks}))
+    restore_cursor(o, start, &g);
+    Ok(json!({"at": [pt.x, pt.y], "clicks": clicks, "mode": "input"}))
 }
 
 fn mouse_action(p: &Value) -> Result<Value, ActError> {
@@ -752,12 +898,16 @@ fn mouse_action(p: &Value) -> Result<Value, ActError> {
         return mouse_path(p, window, button);
     }
     let pt = single.expect("validated above");
+    let o = polite_args(p, false)?;
+    wait_user_idle(&o)?;
+    let start = cursor();
     let mut g = MouseGuard::begin(window)?;
     match action {
         "move" => {
             g.check_target(pt, None)?;
             g.move_to(pt)?;
-            Ok(json!({"at": [pt.x, pt.y]}))
+            restore_cursor(&o, start, &g);
+            Ok(json!({"at": [pt.x, pt.y], "mode": "input"}))
         }
         _ => {
             g.check_target(pt, None)?;
@@ -765,7 +915,10 @@ fn mouse_action(p: &Value) -> Result<Value, ActError> {
             g.before_button(pt, None)?;
             let (d, u) = button.flags();
             send(&[mouse(if action == "down" { d } else { u }, 0, 0, 0)])?;
-            Ok(json!({"at": [pt.x, pt.y], "action": action}))
+            if action == "up" {
+                restore_cursor(&o, start, &g);
+            }
+            Ok(json!({"at": [pt.x, pt.y], "action": action, "mode": "input"}))
         }
     }
 }
@@ -798,6 +951,9 @@ fn mouse_path(p: &Value, window: Option<HWND>, button: Button) -> Result<Value, 
             }
             let hold = p.get("hold").and_then(Value::as_bool).unwrap_or(true);
             let step_ms = opt_int(p, "step_ms", 8, 0, 200)? as u64;
+            let o = polite_args(p, false)?;
+            wait_user_idle(&o)?;
+            let start = cursor();
             let mut g = MouseGuard::begin(window)?;
             g.check_target(pts[0], None)?;
             g.move_to(pts[0])?;
@@ -815,19 +971,35 @@ fn mouse_path(p: &Value, window: Option<HWND>, button: Button) -> Result<Value, 
                 g.before_button(*pts.last().unwrap(), None)?;
                 b.release()?;
             }
-            Ok(json!({"points": pts.len()}))
+            restore_cursor(&o, start, &g);
+            Ok(json!({"points": pts.len(), "mode": "input"}))
         }
     }
 }
 
 fn scroll(p: &Value) -> Result<Value, ActError> {
-    let pt = point(p, "x", "y")?;
-    let window = window_arg(p, "window", false)?;
     let dy = opt_int(p, "dy", 0, -50, 50)? as i32;
     let dx = opt_int(p, "dx", 0, -50, 50)? as i32;
+    let o = polite_args(p, true)?;
+    let (pt, window) = if let Some(r) = p.get("ref").filter(|v| !v.is_null()) {
+        let t = crate::perceive::resolve(r)?;
+        if let Some(v) = crate::perceive::scroll_background(&t, dx, dy)? {
+            return Ok(v);
+        }
+        if dx == 0 && dy == 0 {
+            return Err(bad(
+                "this element cannot be scrolled into view; give 'dy'/'dx' to wheel over it",
+            ));
+        }
+        (t.center()?, Some(t.window))
+    } else {
+        (point(p, "x", "y")?, window_arg(p, "window", false)?)
+    };
     if dx == 0 && dy == 0 {
         return Err(bad("give 'dy' and/or 'dx' (notches)"));
     }
+    wait_user_idle(&o)?;
+    let start = cursor();
     let mut g = MouseGuard::begin(window)?;
     g.check_target(pt, None)?;
     g.move_to(pt)?;
@@ -852,21 +1024,36 @@ fn scroll(p: &Value) -> Result<Value, ActError> {
         )])?;
         sleep(Duration::from_millis(25));
     }
-    Ok(json!({"at": [pt.x, pt.y], "dx": dx, "dy": dy}))
+    restore_cursor(&o, start, &g);
+    Ok(json!({"at": [pt.x, pt.y], "dx": dx, "dy": dy, "mode": "input"}))
+}
+
+/// A drag end point: `<k>_ref` (element centre, its window) or `<k>_x`/`<k>_y`.
+fn drag_end(p: &Value, k: &str) -> Result<(POINT, Option<HWND>), ActError> {
+    match p.get(format!("{k}_ref")).filter(|v| !v.is_null()) {
+        Some(r) => {
+            let t = crate::perceive::resolve(r)?;
+            Ok((t.center()?, Some(t.window)))
+        }
+        None => Ok((point(p, &format!("{k}_x"), &format!("{k}_y"))?, None)),
+    }
 }
 
 fn drag(p: &Value) -> Result<Value, ActError> {
-    let from = point(p, "from_x", "from_y")?;
-    let to = point(p, "to_x", "to_y")?;
-    let window = window_arg(p, "window", false)?;
-    let to_window = window_arg(p, "to_window", false)?.or(window);
+    let (from, from_win) = drag_end(p, "from")?;
+    let (to, to_win) = drag_end(p, "to")?;
+    let window = window_arg(p, "window", false)?.or(from_win);
+    let to_window = window_arg(p, "to_window", false)?.or(to_win).or(window);
     let steps = opt_int(p, "steps", 20, 1, 500)? as i32;
     let step_ms = opt_int(p, "step_ms", 12, 0, 200)? as u64;
     let hold_ms = opt_int(p, "hold_ms", 60, 0, 2000)? as u64;
     let button = button_arg(p)?;
+    let o = polite_args(p, true)?;
+    wait_user_idle(&o)?;
     if modifiers_held() {
         return Err(user_active("a modifier key is held"));
     }
+    let start = cursor();
     let mut g = MouseGuard::begin(window)?;
     g.check_target(from, None)?;
     g.move_to(from)?;
@@ -885,7 +1072,8 @@ fn drag(p: &Value) -> Result<Value, ActError> {
     sleep(Duration::from_millis(hold_ms));
     g.before_button(to, to_window)?;
     hold.release()?;
-    Ok(json!({"from": [from.x, from.y], "to": [to.x, to.y], "steps": steps}))
+    restore_cursor(&o, start, &g);
+    Ok(json!({"from": [from.x, from.y], "to": [to.x, to.y], "steps": steps, "mode": "input"}))
 }
 
 fn type_text(p: &Value) -> Result<Value, ActError> {
@@ -898,6 +1086,7 @@ fn type_text(p: &Value) -> Result<Value, ActError> {
         return Err(bad("'text' is limited to 10,000 characters per call"));
     }
     let submit = p.get("submit").and_then(Value::as_bool).unwrap_or(false);
+    wait_user_idle(&polite_args(p, false)?)?;
     if modifiers_held() {
         return Err(user_active(
             "a modifier key is held (typed text would become shortcuts)",
@@ -917,7 +1106,7 @@ fn type_text(p: &Value) -> Result<Value, ActError> {
         send_char(&[INPUTDESC::Vk(VK_RETURN)])?;
     }
     // Never echo the text back (it may be sensitive); report only the count.
-    Ok(json!({"typed_chars": chars.len(), "submitted": submit}))
+    Ok(json!({"typed_chars": chars.len(), "submitted": submit, "mode": "input"}))
 }
 
 fn press_keys(p: &Value) -> Result<Value, ActError> {
@@ -937,6 +1126,7 @@ fn press_keys(p: &Value) -> Result<Value, ActError> {
                 .and_then(parse_chord)
         })
         .collect::<Result<_, _>>()?;
+    wait_user_idle(&polite_args(p, false)?)?;
     if modifiers_held() {
         return Err(user_active("a modifier key is held"));
     }
@@ -949,7 +1139,7 @@ fn press_keys(p: &Value) -> Result<Value, ActError> {
         drop(_mods);
         sleep(Duration::from_millis(30));
     }
-    Ok(json!({"chords": chords.len()}))
+    Ok(json!({"chords": chords.len(), "mode": "input"}))
 }
 
 fn clipboard(p: &Value) -> Result<Value, ActError> {
@@ -1102,6 +1292,25 @@ mod tests {
         assert_eq!(ev[3], vec![INPUTDESC::Vk(VK_RETURN)]);
         assert_eq!(ev[4].len(), 2, "emoji is a surrogate pair");
         assert_eq!(text_events("x\r\ny").len(), 3, "CR is dropped, LF is Enter");
+    }
+
+    #[test]
+    fn own_injections_do_not_count_as_user_activity() {
+        // never injected: plain idle time
+        assert_eq!(user_idle(10_000, 9_000, 0), Some(1_000));
+        // newest event is ours (stamped a little after SendInput returned)
+        assert_eq!(user_idle(10_000, 9_020, 9_000), None);
+        assert_eq!(user_idle(10_000, 8_000, 9_000), None);
+        // the user acted after our injection
+        assert_eq!(user_idle(10_000, 9_500, 9_000), Some(500));
+        // tick counter wrap-around
+        assert_eq!(user_idle(5, u32::MAX - 4, 0), Some(10));
+        assert_eq!(user_idle(5, 2, u32::MAX - 100), Some(3));
+        assert_eq!(
+            user_idle(5, 2, u32::MAX - 10),
+            None,
+            "13 ms after our injection"
+        );
     }
 
     #[test]

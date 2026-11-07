@@ -81,3 +81,27 @@ test('core binary writes the action log without the token', async () => {
   assert.equal(conn.pipe, env.XTRAOS_PIPE);
   fs.rmSync(env.XTRAOS_HOME, { recursive: true, force: true });
 });
+
+// M4 through MCP: a screenshot comes back as an MCP image block plus the mapping line; perception
+// errors keep their contract codes. (Region of 16x16 px only: reads nothing of the user's windows.)
+test('screenshot returns an image block; observe errors map to contract codes', async () => {
+  const env = testEnv();
+  const core = await startCore(env);
+  const mcp = new McpClient(env);
+  try {
+    await mcp.init();
+    const r = await mcp.rpc('tools/call', { name: 'screenshot', arguments: { region: { x: 0, y: 0, w: 16, h: 16 }, scale: 1 } });
+    const content = r.result.content as Array<{ type: string; data?: string; mimeType?: string; text?: string }>;
+    assert.equal(r.result.isError ?? false, false, JSON.stringify(r.result));
+    assert.equal(content[0].type, 'image');
+    assert.equal(content[0].mimeType, 'image/png');
+    assert.ok(Buffer.from(content[0].data!, 'base64').subarray(1, 4).toString() === 'PNG');
+    assert.match(content[1].text!, /^region 16x16px · screen = \(0,0\) \+ px \/ 1$/);
+    const o = await mcp.callTool('observe', { window: 'w1' });
+    assert.ok(o.isError && o.text.startsWith('ERROR WINDOW_NOT_FOUND'), o.text);
+    const s = await mcp.callTool('click', { ref: 'e999999' });
+    assert.ok(s.isError && s.text.startsWith('ERROR STALE_REF'), s.text);
+  } finally {
+    await mcp.close(); await stopProcess(core); fs.rmSync(env.XTRAOS_HOME, { recursive: true, force: true });
+  }
+});

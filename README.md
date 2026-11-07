@@ -4,10 +4,10 @@ A local **AI action runtime**: the bridge that lets any AI model see and operate
 (apps, browsers, terminals, files, games) safely, fast, and token-efficiently.
 The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 
-> Status: **Phase 1 — M1, M2, M3 closed** (secure IPC, MCP, real input, windows & apps;
-> ADRs 0009–0013). **Next: M4 Perception.** Gates: `tests/phase0/run-tests.ps1`,
-> `tests/phase1/m1-gate.ps1`, `m2-gate.ps1`, `m3-gate.ps1` (`-Interactive` moves the mouse and
-> types into the testbed; `-Uac` needs a human UAC click; `-Browsers` opens Chrome/Firefox).
+> Status: **Phase 1 — M1–M4 closed** (secure IPC, MCP, real input, windows & apps, perception
+> and background-first actions; ADRs 0009–0016). **Next: M5 Safety.** Gates:
+> `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m4-gate.ps1` (`-Interactive` moves
+> the mouse and types into the testbed; `-Uac` needs a human UAC click; `-Browsers` opens Chrome/Firefox).
 
 ## Documents
 
@@ -38,4 +38,9 @@ The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 | Window control: list, focus, launch (incl. admin via UAC), graceful close, move/resize/min/max | verified — M3 gate (ADR 0013) |
 | Elevation boundary: admin windows refused untouched (`ELEVATION_REQUIRED`) | verified — M3 gate |
 | Browser flow without extensions (Chrome, Firefox: search → close) | verified — M3 gate |
-| Reading the screen (UI tree, OCR, screenshots) | not yet (M4) |
+| Reading windows: `observe` (element refs, diffs, opaque flag), `find`, `read_text`; passwords always masked | verified — M4 gate (ADR 0016) |
+| Screenshots of a window or region with exact screen mapping | verified — M4 gate |
+| Background actions without the user's mouse/keyboard: `click(ref)`, `set_value`, `scroll(ref)`; focus kept with the user | verified — M4 gate (Calculator, WinForms) |
+| Polite real input: waits for the user to be idle, puts the cursor back; drag by element ref (Explorer → app) | verified — M4 gate |
+| Fast observe on windows with hundreds of list items | not yet (Phase 2; 222 ms measured vs 120 ms budget) |
+| OCR | not yet (Phase 2) |

@@ -149,6 +149,8 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
                 let res = tokio::task::spawn_blocking(move || {
                     if crate::winmgr::METHODS.contains(&m.as_str()) {
                         crate::winmgr::run(&m, &params)
+                    } else if crate::perceive::METHODS.contains(&m.as_str()) {
+                        crate::perceive::run(&m, &params)
                     } else {
                         input::run(&m, &params)
                     }

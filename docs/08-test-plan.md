@@ -230,6 +230,13 @@ A fake bridge in the test process runs every row except LIVE, so no browser and 
 | P3-TP-04 | 3-finger swipe | asks (system_settings); Deny → nothing injected |
 | P3-TP-01..03 | (hands off) touch tap on a button; pen stroke on the pad; kill switch during a long press | click counted; path recorded; `STOPPED`, contact lifted |
 
+### Log chain + task limit (ADR 0038)
+| ID | Test case | Expected |
+|---|---|---|
+| LG-01 | `--verify-log` on an intact log; then one character edited | exit 0 "OK: n entries"; exit 1 naming the file and line, "content changed" |
+| LG-02 (unit) | deleted line, reordered lines, removed older file, legacy unchained lines | each break found; legacy counted, not an error |
+| TL-01 | `max_actions_per_task: 5`: 6th action; Stop; another action; Resume from the tray; limit again; Continue | asks; refused; refused without a new dialog; fresh allowance; asks; continues |
+
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).
 2. Fix → add/extend a test that would have caught it → re-run the full gate.

@@ -8,10 +8,10 @@ XtraOS Agent can do anything the logged-in user can do. Security is a product fe
 |---|---|
 | Another process or web page drives the core | Named pipe ACL = current user SID only, NETWORK denied, remote clients rejected, first-instance flag against squatting; 256-bit pairing token in a user-only file (ADR 0009); no TCP listener. Browser driver bridge binds 127.0.0.1 with origin check + token (as in the XtraDevPilot bridge security fix, commit 2a4e51b). |
 | Prompt injection from on-screen content ("click Send to all") | Page/app text is returned as data. Policy engine enforces confirm/deny regardless of what the agent asks. Sensitive actions always confirm. |
-| Agent runs away (loops, wrong window) | Kill switch (hotkey + tray), visible overlay, per-session action rate limit, max actions per task (configurable). |
+| Agent runs away (loops, wrong window) | Kill switch (hotkey + tray), visible overlay, per-minute action rate limit; max actions per task (default 2,000 without a 10-minute pause, then the user is asked to continue; configurable; ADR 0038). |
 | Secrets leak through logs or observations | Password fields (UIA IsPassword) are never read or typed; values masked in observations and logs. |
 | Privilege escalation | Elevation only via UAC with a human click. Elevated helper is opt-in, separately installed, and only accepts the core's pipe. |
-| Tampering with policy/log | Policy file and log in `%LOCALAPPDATA%\XtraOS\` with user-only ACL; log is append-only with a hash chain (P2). |
+| Tampering with policy/log | Policy file and log in `%LOCALAPPDATA%\XtraOS\` with user-only ACL; log is append-only and hash-chained across files (SHA-256; `xtraos-core --verify-log`, also shown in the viewer; ADR 0038). Limit: software running as the same user could rewrite the whole chain; off-PC audit export is the stronger answer (Phase 4). |
 | Supply chain | Pinned dependencies, lockfiles committed, signed releases (before public launch). |
 
 ## Policy engine

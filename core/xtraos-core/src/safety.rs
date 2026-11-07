@@ -61,6 +61,7 @@ static PROMPT_CV: Condvar = Condvar::new();
 static NEXT_PROMPT: AtomicU64 = AtomicU64::new(1);
 static POLICY: Mutex<Option<policy::Store>> = Mutex::new(None);
 static RATE: Mutex<Option<(Instant, policy::RateLimiter)>> = Mutex::new(None);
+static TASK: Mutex<Option<(Instant, policy::TaskLimiter)>> = Mutex::new(None);
 /// Policy reload decisions waiting to be written to the action log (ipc drains them after
 /// every request — also when the request itself was then blocked).
 static POLICY_NOTES: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -323,6 +324,10 @@ pub fn stop() {
 }
 
 fn resume() {
+    // Resuming from the tray also starts a fresh task allowance (ADR 0038).
+    if let Some((_, l)) = TASK.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        l.reset();
+    }
     if STOPPED.swap(false, Ordering::SeqCst) {
         eprintln!("[xtraos-core] resumed by the user");
     }
@@ -684,7 +689,7 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
     } else {
         None
     };
-    let ((decision, reason, what, rate), _note) = with_policy(|s| {
+    let ((decision, reason, what, rate, task), _note) = with_policy(|s| {
         let (mut f, mut what) = gather(method, p);
         if let Some(pl) = &skill {
             f.method = format!("run_skill:{}", pl.name);
@@ -692,7 +697,13 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
             what = pl.what.clone();
         }
         let (d, why) = s.policy.decide(&f);
-        (d, why, what, s.policy.rate_per_minute)
+        (
+            d,
+            why,
+            what,
+            s.policy.rate_per_minute,
+            (s.policy.max_actions_per_task, s.policy.task_idle_minutes),
+        )
     });
     {
         let mut g = RATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -701,6 +712,53 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
             return Err(blocked(format!(
                 "more than {rate} actions per minute (runaway loop protection)"
             )));
+        }
+    }
+    // Max actions per task (ADR 0038): ask the user to continue a very long task.
+    let (max_task, idle_min) = task;
+    let check = {
+        let mut g = TASK.lock().unwrap_or_else(|e| e.into_inner());
+        let (t0, lim) = g.get_or_insert_with(|| (Instant::now(), policy::TaskLimiter::default()));
+        lim.check(
+            t0.elapsed().as_millis() as u64,
+            max_task,
+            idle_min as u64 * 60_000,
+        )
+    };
+    match check {
+        policy::TaskCheck::Go => {}
+        policy::TaskCheck::Refused => {
+            return Err(blocked(format!(
+                "you stopped this long task; the agent may continue after a {idle_min}-minute pause"
+            )))
+        }
+        policy::TaskCheck::Ask(n) => {
+            activity("waiting for you: long task");
+            let before = winmgr::foreground_root();
+            let answer = prompt(
+                "XtraOS Agent — long task",
+                &format!(
+                    "The AI agent has done {n} actions in this task without a break.\n\nNext: {what}\n\nLet it continue for another {max_task} actions?"
+                ),
+                vec!["Continue".into(), "Stop".into()],
+                1,
+                Duration::from_secs(60),
+            )?;
+            if !before.is_null() && winmgr::exists(before) && !is_own_window(before) {
+                winmgr::focus(before);
+            }
+            let mut g = TASK.lock().unwrap_or_else(|e| e.into_inner());
+            let lim = &mut g
+                .get_or_insert_with(|| (Instant::now(), policy::TaskLimiter::default()))
+                .1;
+            if answer == Some(0) {
+                lim.continue_task();
+            } else {
+                lim.stop();
+                return Err(blocked(format!(
+                    "{n} actions in this task: stopped by the user (max_actions_per_task)"
+                )));
+            }
         }
     }
     let decision = match decision {

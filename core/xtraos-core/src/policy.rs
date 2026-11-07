@@ -515,6 +515,10 @@ pub struct Policy {
     pub classes: HashMap<Class, Decision>,
     pub apps: HashMap<String, Decision>,
     pub rate_per_minute: u32,
+    /// Runaway guard (ADR 0038): actions per task before the user is asked to continue.
+    pub max_actions_per_task: u32,
+    /// A pause this long ends a task.
+    pub task_idle_minutes: u32,
     /// Source file (if any) and a short hash of its content, for the action log.
     pub source: Option<(PathBuf, String)>,
     pub warnings: Vec<String>,
@@ -532,6 +536,8 @@ impl Default for Policy {
                 .map(|p| (p.to_string(), Decision::Deny))
                 .collect(),
             rate_per_minute: 600,
+            max_actions_per_task: 2000,
+            task_idle_minutes: 10,
             source: None,
             warnings: Vec::new(),
         }
@@ -580,6 +586,12 @@ impl Policy {
         }
         if let Some(r) = v.get("rate_per_minute").and_then(Value::as_u64) {
             p.rate_per_minute = r.clamp(10, 10_000) as u32;
+        }
+        if let Some(r) = v.get("max_actions_per_task").and_then(Value::as_u64) {
+            p.max_actions_per_task = r.clamp(5, 1_000_000) as u32;
+        }
+        if let Some(r) = v.get("task_idle_minutes").and_then(Value::as_u64) {
+            p.task_idle_minutes = r.clamp(1, 1440) as u32;
         }
         p.enforce_hard_rules();
         p
@@ -669,6 +681,54 @@ impl RateLimiter {
     }
 }
 
+/// Max actions per task (ADR 0038). A task is a run of actions without a pause of
+/// `idle_ms`. At the limit the user is asked; after "Stop" actions are refused until the
+/// agent pauses (or the user resumes from the tray).
+#[derive(Default)]
+pub struct TaskLimiter {
+    count: u32,
+    last_ms: Option<u64>,
+    stopped: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum TaskCheck {
+    Go,
+    Ask(u32),
+    Refused,
+}
+
+impl TaskLimiter {
+    pub fn check(&mut self, now_ms: u64, max: u32, idle_ms: u64) -> TaskCheck {
+        if self
+            .last_ms
+            .is_some_and(|l| now_ms.saturating_sub(l) >= idle_ms)
+        {
+            self.count = 0;
+            self.stopped = false;
+        }
+        self.last_ms = Some(now_ms);
+        if self.stopped {
+            return TaskCheck::Refused;
+        }
+        if self.count >= max {
+            return TaskCheck::Ask(self.count);
+        }
+        self.count += 1;
+        TaskCheck::Go
+    }
+    /// The user said Continue: a fresh allowance, this action counts.
+    pub fn continue_task(&mut self) {
+        self.count = 1;
+    }
+    pub fn stop(&mut self) {
+        self.stopped = true;
+    }
+    pub fn reset(&mut self) {
+        *self = TaskLimiter::default();
+    }
+}
+
 /// Cached policy that reloads when the file's modification time changes.
 pub struct Store {
     path: PathBuf,
@@ -736,6 +796,18 @@ pub fn summary(old: &Policy, new: &Policy) -> Vec<String> {
         if x != y {
             out.push(format!("app {a}: {} → {}", name(x), name(y)));
         }
+    }
+    if old.max_actions_per_task != new.max_actions_per_task {
+        out.push(format!(
+            "max_actions_per_task: {} → {}",
+            old.max_actions_per_task, new.max_actions_per_task
+        ));
+    }
+    if old.task_idle_minutes != new.task_idle_minutes {
+        out.push(format!(
+            "task_idle_minutes: {} → {}",
+            old.task_idle_minutes, new.task_idle_minutes
+        ));
     }
     if old.rate_per_minute != new.rate_per_minute {
         out.push(format!(
@@ -948,5 +1020,35 @@ mod tests {
             ..Default::default()
         };
         assert!(classify(&f).iter().any(|(c, _)| *c == Class::Purchase));
+    }
+
+    #[test]
+    fn task_limiter_asks_continues_stops_and_resets_after_a_pause() {
+        let mut t = TaskLimiter::default();
+        for i in 0..3 {
+            assert_eq!(t.check(i * 1000, 3, 600_000), TaskCheck::Go);
+        }
+        assert_eq!(t.check(4000, 3, 600_000), TaskCheck::Ask(3));
+        t.continue_task();
+        assert_eq!(t.check(5000, 3, 600_000), TaskCheck::Go);
+        assert_eq!(t.check(6000, 3, 600_000), TaskCheck::Go);
+        assert_eq!(t.check(7000, 3, 600_000), TaskCheck::Ask(3));
+        t.stop();
+        assert_eq!(
+            t.check(8000, 3, 600_000),
+            TaskCheck::Refused,
+            "stays stopped while busy"
+        );
+        assert_eq!(
+            t.check(8000 + 600_000, 3, 600_000),
+            TaskCheck::Go,
+            "a pause ends the task"
+        );
+        let p = Policy::from_json(r#"{"max_actions_per_task": 2, "task_idle_minutes": 0}"#);
+        assert_eq!(
+            (p.max_actions_per_task, p.task_idle_minutes),
+            (5, 1),
+            "clamped"
+        );
     }
 }

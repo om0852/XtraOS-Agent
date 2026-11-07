@@ -73,6 +73,7 @@ Recorded flows: [docs/flows](docs/flows/README.md) · Bench: [docs/bench/release
 | Web pages via the XtraDevPilot bridge (`browser`): selectors/text, same policy (messaging send asks, buy and password fields refused); no scripts or cookies | automated tests pass (fake bridge, ADR 0033); live check needs the token-enabled XtraDevPilot |
 | Long and virtualised lists: off-screen rows found, `find deep` reaches Explorer rows never drawn, a row click selects (never opens) | verified: P2-M7 automated tests (ADR 0035) |
 | Send/Buy/Delete safety words in Hindi, Marathi, Spanish, French, German, Portuguese; read-only "Rules and activity" viewer (tray) | verified: unit + viewer test (ADR 0035) |
+| Tamper-evident action log (hash chain; `xtraos-core --verify-log`) and a max-actions-per-task guard that asks you to continue | verified: LG-01, TL-01 (ADR 0038) |
 | Rules editor in the tray viewer (the core still asks before applying); every XtraOS window is off limits to the agent | verified: P2-ED tests (ADR 0037) |
 | `frame_diff`: what changed in a canvas/game window, or wait for a change | verified: P3-FD tests |
 | `record_session`: the agent's actions saved as a replayable skill with locators (works after windows move; typed text editable; passwords never recorded) | verified: P3-RR tests |

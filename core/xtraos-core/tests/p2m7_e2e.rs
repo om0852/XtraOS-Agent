@@ -511,3 +511,131 @@ async fn rr01_04_record_and_replay() {
     core.stop().await;
     let _ = std::fs::remove_dir_all(home);
 }
+
+// LG-01 (ADR 0038): `--verify-log` passes on an intact log and finds a one-character edit.
+#[test]
+fn lg01_verify_log_cli() {
+    use xtraos_core::actionlog::{ActionLog, Entry};
+    let home = std::env::temp_dir().join(format!("xtraos-lg-{}", common::rand_hex(3)));
+    let logs = home.join("logs");
+    let log = ActionLog::create(&logs).unwrap();
+    for m in ["status", "observe", "click"] {
+        log.record(&Entry {
+            ts_ms: 1,
+            session: Some("s1"),
+            client: Some("t"),
+            method: m,
+            ok: true,
+            code: None,
+            ms: 2.5,
+            policy: Some("allow"),
+        });
+    }
+    let path = log.path().to_path_buf();
+    drop(log);
+    let run = || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_xtraos-core"))
+            .arg("--verify-log")
+            .env("XTRAOS_HOME", &home)
+            .output()
+            .unwrap()
+    };
+    let ok = run();
+    let out = String::from_utf8_lossy(&ok.stdout).to_string();
+    eprintln!("LG-01 intact: {out}");
+    assert_eq!(ok.status.code(), Some(0));
+    assert!(out.starts_with("OK: 3 entries"), "{out}");
+    let t = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"observe\"", "\"0bserve\"");
+    std::fs::write(&path, t).unwrap();
+    let bad = run();
+    let out = String::from_utf8_lossy(&bad.stdout).to_string();
+    eprintln!("LG-01 edited: {out}");
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(
+        out.contains("line 2") && out.contains("content changed"),
+        "{out}"
+    );
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[link(name = "user32")]
+extern "system" {
+    fn GetWindowTextW(h: *mut std::ffi::c_void, buf: *mut u16, n: i32) -> i32;
+}
+
+fn answer_next_dialog(i: i32) -> std::thread::JoinHandle<Option<String>> {
+    std::thread::spawn(move || {
+        let t0 = Instant::now();
+        while t0.elapsed() < Duration::from_secs(10) {
+            if let Some(&d) = xtraos_core::safety::prompt_windows().first() {
+                std::thread::sleep(Duration::from_millis(300));
+                let mut buf = [0u16; 2048];
+                let st = unsafe { GetDlgItem(d as _, xtraos_core::safety::PROMPT_TEXT_ID) };
+                let n = unsafe { GetWindowTextW(st, buf.as_mut_ptr(), 2048) };
+                let b = unsafe { GetDlgItem(d as _, xtraos_core::safety::PROMPT_BUTTON_BASE + i) };
+                unsafe { SendMessageW(b, 0x00F5, 0, 0) };
+                return Some(String::from_utf16_lossy(&buf[..n.max(0) as usize]));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        None
+    })
+}
+
+// TL-01 (ADR 0038): max_actions_per_task = 5. The 6th action asks; Stop refuses (and keeps
+// refusing while the agent stays busy); Resume from the tray resets; Continue carries on.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "shows a core dialog (answered by the test)"]
+async fn tl01_max_actions_per_task() {
+    let _s = SERIAL.lock().await;
+    let home = std::env::temp_dir().join(format!("xtraos-tl-{}", common::rand_hex(3)));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("policy.json"),
+        r#"{"max_actions_per_task": 5, "task_idle_minutes": 10}"#,
+    )
+    .unwrap();
+    xtraos_core::safety::set_policy_path(home.join("policy.json"));
+    let mut core = Core::start().await;
+    // Policy file applied (a first load may ask: approve it).
+    let first = answer_next_dialog(0);
+    let r = core.call("list_windows", json!({})).await;
+    let _ = first.join();
+    assert!(r.get("result").is_some(), "{r}");
+    for _ in 0..4 {
+        core.ok("list_windows", json!({})).await;
+    }
+    let human = answer_next_dialog(1); // Stop
+    let r = core.call("list_windows", json!({})).await;
+    let msg = human.join().unwrap().expect("long-task dialog");
+    eprintln!("TL-01 dialog: {}", msg.replace('\n', " "));
+    assert!(msg.contains("5 actions in this task"), "{msg}");
+    assert_eq!(code(&r), "BLOCKED_BY_POLICY", "{r}");
+    let r = core.call("list_windows", json!({})).await;
+    assert_eq!(
+        code(&r),
+        "BLOCKED_BY_POLICY",
+        "still refused while busy: {r}"
+    );
+    assert!(
+        xtraos_core::safety::prompt_windows().is_empty(),
+        "no dialog spam"
+    );
+    // Resume from the tray resets the task.
+    let ui = xtraos_core::safety::ui_window().unwrap();
+    unsafe { PostMessageW(ui as _, 0x0111, xtraos_core::safety::ID_RESUME, 0) };
+    std::thread::sleep(Duration::from_millis(200));
+    for _ in 0..5 {
+        core.ok("list_windows", json!({})).await;
+    }
+    let human = answer_next_dialog(0); // Continue
+    let r = core.call("list_windows", json!({})).await;
+    human.join().unwrap().expect("dialog again at the limit");
+    assert!(r.get("result").is_some(), "Continue lets it go on: {r}");
+    core.ok("list_windows", json!({})).await;
+    eprintln!("TL-01 ok: ask at the limit, Stop refuses, Resume resets, Continue carries on");
+    core.stop().await;
+    let _ = std::fs::remove_dir_all(home);
+}

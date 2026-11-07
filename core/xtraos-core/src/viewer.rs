@@ -28,6 +28,8 @@ const ID_APPS: i32 = 200;
 const ID_RATE: i32 = 201;
 const ID_SAVE: i32 = 202;
 const ID_STATUS: i32 = 203;
+const ID_TASK_MAX: i32 = 204;
+const ID_TASK_IDLE: i32 = 205;
 const EDITOR_W: i32 = 420;
 const ROW_H: i32 = 27;
 
@@ -89,7 +91,14 @@ pub fn updated_json(
     classes: &[(Class, Decision)],
     apps: &[(String, Decision)],
     rate: u32,
+    task: (u32, u32),
 ) -> Result<String, String> {
+    if !(5..=1_000_000).contains(&task.0) {
+        return Err("max actions per task must be 5..1000000".into());
+    }
+    if !(1..=1440).contains(&task.1) {
+        return Err("task pause must be 1..1440 minutes".into());
+    }
     if classes
         .iter()
         .any(|(c, d)| *c == Class::CredentialEntry && *d != Decision::Deny)
@@ -124,6 +133,8 @@ pub fn updated_json(
     o.insert("classes".into(), serde_json::Value::Object(cs));
     o.insert("apps".into(), serde_json::Value::Object(ap));
     o.insert("rate_per_minute".into(), serde_json::json!(rate));
+    o.insert("max_actions_per_task".into(), serde_json::json!(task.0));
+    o.insert("task_idle_minutes".into(), serde_json::json!(task.1));
     serde_json::to_string_pretty(&v).map_err(|e| e.to_string())
 }
 
@@ -266,10 +277,25 @@ pub fn report(data_dir: &Path) -> String {
         "\r\nSpeed limit: {} actions per minute\r\n",
         p.rate_per_minute
     ));
+    s.push_str(&format!(
+        "Long tasks: after {} actions without a {}-minute pause, you are asked to continue\r\n",
+        p.max_actions_per_task, p.task_idle_minutes
+    ));
     s.push_str("To change a rule: Open policy.json, edit, save. The core asks you to approve the change.\r\n");
     s.push_str(&format!(
         "\r\nRECENT ACTIVITY (newest first, up to {LOG_LINES})\r\n"
     ));
+    let v = crate::actionlog::verify_dir(&data_dir.join("logs"));
+    if v.files > 0 {
+        s.push_str(&format!(
+            "Log integrity: {}\r\n",
+            if v.ok {
+                v.message.clone()
+            } else {
+                format!("BROKEN: {}", v.message)
+            }
+        ));
+    }
     let acts = recent_actions(&data_dir.join("logs"), LOG_LINES);
     if acts.is_empty() {
         s.push_str("  (nothing logged yet)\r\n");
@@ -313,6 +339,8 @@ unsafe fn fill_editor(h: WHWND) {
     }
     set_ctl_text(h, ID_APPS, &apps_to_text(&p));
     set_ctl_text(h, ID_RATE, &p.rate_per_minute.to_string());
+    set_ctl_text(h, ID_TASK_MAX, &p.max_actions_per_task.to_string());
+    set_ctl_text(h, ID_TASK_IDLE, &p.task_idle_minutes.to_string());
 }
 
 /// Save: validate, merge into policy.json, report. The core asks the user before applying.
@@ -332,9 +360,19 @@ unsafe fn save(h: WHWND) {
             .trim()
             .parse::<u32>()
             .map_err(|_| "actions per minute must be a number".to_string())?;
+        let num = |id: i32, what: &str| {
+            ctl_text(h, id)
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| format!("{what} must be a number"))
+        };
+        let task = (
+            num(ID_TASK_MAX, "max actions per task")?,
+            num(ID_TASK_IDLE, "task pause")?,
+        );
         let path = crate::pairing::data_dir().join("policy.json");
         let existing = std::fs::read_to_string(&path).ok();
-        let text = updated_json(existing.as_deref(), &classes, &apps, rate)?;
+        let text = updated_json(existing.as_deref(), &classes, &apps, rate, task)?;
         if existing.as_deref() == Some(text.as_str()) {
             return Ok("No changes.".to_string());
         }
@@ -544,11 +582,51 @@ unsafe extern "system" fn proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
                 ID_RATE,
             );
             let _ = child(
+                w!("STATIC"),
+                "Max actions per task",
+                WINDOW_STYLE(0),
+                8,
+                y0 + 210,
+                170,
+                20,
+                -1,
+            );
+            let _ = child(
+                w!("EDIT"),
+                "",
+                WS_TABSTOP | WINDOW_STYLE(ES_NUMBER as u32),
+                180,
+                y0 + 207,
+                80,
+                22,
+                ID_TASK_MAX,
+            );
+            let _ = child(
+                w!("STATIC"),
+                "Task ends after a pause of (min)",
+                WINDOW_STYLE(0),
+                8,
+                y0 + 238,
+                170,
+                20,
+                -1,
+            );
+            let _ = child(
+                w!("EDIT"),
+                "",
+                WS_TABSTOP | WINDOW_STYLE(ES_NUMBER as u32),
+                180,
+                y0 + 235,
+                80,
+                22,
+                ID_TASK_IDLE,
+            );
+            let _ = child(
                 w!("BUTTON"),
                 "Save rules",
                 WS_TABSTOP,
                 8,
-                y0 + 210,
+                y0 + 268,
                 160,
                 30,
                 ID_SAVE,
@@ -558,7 +636,7 @@ unsafe extern "system" fn proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
                 "",
                 WINDOW_STYLE(0),
                 8,
-                y0 + 246,
+                y0 + 306,
                 402,
                 56,
                 ID_STATUS,
@@ -733,6 +811,7 @@ mod tests {
             &classes,
             &apps,
             300,
+            (2000, 10),
         )
         .unwrap();
         let v: serde_json::Value = serde_json::from_str(&t).unwrap();
@@ -740,15 +819,29 @@ mod tests {
         assert_eq!(v["classes"]["delete"], "deny");
         assert_eq!(v["apps"]["slack.exe"], "deny");
         assert_eq!(v["rate_per_minute"], 300);
+        assert_eq!(v["max_actions_per_task"], 2000);
+        assert!(updated_json(None, &[], &[], 300, (2, 10)).is_err());
         let p = Policy::from_json(&t);
         assert_eq!(p.classes.get(&Class::Delete), Some(&Decision::Deny));
+        assert!(updated_json(
+            None,
+            &[(Class::CredentialEntry, Decision::Allow)],
+            &[],
+            300,
+            (2000, 10)
+        )
+        .is_err());
+        assert!(updated_json(
+            None,
+            &[(Class::Purchase, Decision::Allow)],
+            &[],
+            300,
+            (2000, 10)
+        )
+        .is_err());
+        assert!(updated_json(None, &[], &[], 5, (2000, 10)).is_err());
         assert!(
-            updated_json(None, &[(Class::CredentialEntry, Decision::Allow)], &[], 300).is_err()
-        );
-        assert!(updated_json(None, &[(Class::Purchase, Decision::Allow)], &[], 300).is_err());
-        assert!(updated_json(None, &[], &[], 5).is_err());
-        assert!(
-            updated_json(Some("{broken"), &[], &[], 300).is_err(),
+            updated_json(Some("{broken"), &[], &[], 300, (2000, 10)).is_err(),
             "never overwrite a broken file"
         );
         let round = apps_to_text(&Policy::from_json(&t));

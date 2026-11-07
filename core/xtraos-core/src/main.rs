@@ -13,6 +13,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("--elevated-helper") {
         std::process::exit(xtraos_core::helper::helper_main(&args));
     }
+    // `--viewer`: the read-only rules and activity window (ADR 0034).
+    if args.first().map(String::as_str) == Some("--viewer") {
+        std::process::exit(xtraos_core::viewer::run_viewer());
+    }
     core_main();
 }
 

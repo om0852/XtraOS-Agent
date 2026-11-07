@@ -209,6 +209,17 @@ A fake bridge in the test process runs every row except LIVE, so no browser and 
 | P2-BR-05 | kill switch | `STOPPED`, nothing sent |
 | P2-BR-LIVE | (`XTRAOS_TEST_BRIDGE=1`) list_browsers on the real bridge | browser count |
 
+### P2-M7 Phase 2 leftovers (ADR 0034)
+| ID | Test case | Expected |
+|---|---|---|
+| P2-LO-01 | `find "item 150"` in the testbed's 200-row list, then `click(ref)` | found `(offscreen)`; selected in the background (`via: select`) |
+| P2-LO-02 | `find zipfldr.dll` in an Explorer System32 window: plain, then `deep`; click; partial `deep` "kernel32" | plain: 0; deep: found `(virtualized)`; click realises and **selects** (never opens); partial is found within the budget |
+| P2-LO-03 | observe speed record on Explorer System32 + testbed list | p50 recorded; regression guard ≤ 1,000 ms |
+| P2-LO-04 | localised Send/Buy/Delete words (unit) | exact names match; longer labels do not |
+| P2-LO-05 | `--viewer` on a private data folder | shows the rules and the newest actions first; writes nothing; exit 0 |
+| P2-LO-06 | (bench, hands off) `type` 50 chars into the Run box | recorded next to the testbed row |
+| P2-LO-07 | (hands off) 30 s input census | counts per source; foreign injected input = 0 expected |
+
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).
 2. Fix → add/extend a test that would have caught it → re-run the full gate.

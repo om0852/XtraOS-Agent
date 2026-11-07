@@ -98,6 +98,8 @@ struct Uia {
     cache: IUIAutomationCacheRequest,
     /// Control view minus offscreen elements, filtered inside UIA (observe: ADR 0003 budget).
     cache_visible: IUIAutomationCacheRequest,
+    /// Element only, whole control view (deep find placeholders).
+    cache_one: IUIAutomationCacheRequest,
 }
 // SAFETY: UIA client interfaces are agile within the MTA, which every thread that touches them
 // joins (com_init) and which is pinned alive by CoIncrementMTAUsage.
@@ -170,6 +172,22 @@ fn uia() -> Result<Arc<Uia>, ActError> {
         let visible = a
             .CreateAndCondition(&control_view, &onscreen)
             .map_err(|e| com_err("CreateAndCondition", e))?;
+        let make_scoped = |filter: &IUIAutomationCondition,
+                           scope: TreeScope|
+         -> Result<IUIAutomationCacheRequest, ActError> {
+            let c = a
+                .CreateCacheRequest()
+                .map_err(|e| com_err("CreateCacheRequest", e))?;
+            for &p in CACHED_PROPS {
+                c.AddProperty(p).map_err(|e| com_err("AddProperty", e))?;
+            }
+            c.SetTreeScope(scope)
+                .map_err(|e| com_err("SetTreeScope", e))?;
+            c.SetTreeFilter(filter)
+                .map_err(|e| com_err("SetTreeFilter", e))?;
+            Ok(c)
+        };
+        let cache_one = make_scoped(&control_view, TreeScope_Element)?;
         let make =
             |filter: &IUIAutomationCondition| -> Result<IUIAutomationCacheRequest, ActError> {
                 let c = a
@@ -190,6 +208,7 @@ fn uia() -> Result<Arc<Uia>, ActError> {
             a,
             cache,
             cache_visible,
+            cache_one,
         }
     };
     let u = Arc::new(u);
@@ -378,6 +397,9 @@ struct Node {
     /// Inside a title bar or scroll bar: window chrome, never printed (close_window,
     /// window_bounds and scroll cover it) but still searchable with find.
     chrome: bool,
+    /// A virtualised placeholder from ItemContainerPattern (find deep): realised when an
+    /// action uses its ref (ADR 0034).
+    virt: bool,
 }
 
 /// A cached property value, decoded and freed.
@@ -534,6 +556,7 @@ fn node(el: IUIAutomationElement) -> Node {
             rid,
             info,
             chrome: false,
+            virt: false,
         }
     }
 }
@@ -559,7 +582,9 @@ fn collect(el: &IUIAutomationElement, depth: u32, chrome: bool, out: &mut Vec<No
     }
 }
 
-/// Whole cached tree of a top-level window (one cross-process round trip).
+/// Whole cached tree of a top-level window (one cross-process round trip). Fetching the
+/// top-level parts in parallel was measured (ADR 0035) and is not faster: providers answer
+/// one request at a time.
 fn snapshot(h: HWND, visible_only: bool) -> Result<Vec<Node>, ActError> {
     let u = uia()?;
     let cache = if visible_only {
@@ -593,6 +618,7 @@ struct Entry {
     rid: Vec<i32>,
     password: bool,
     name: String,
+    virt: bool,
 }
 
 #[derive(Default)]
@@ -644,6 +670,7 @@ impl Table {
                 rid: n.rid.clone(),
                 password: n.info.password,
                 name: n.info.name.clone(),
+                virt: n.virt,
             },
         );
         r
@@ -756,10 +783,10 @@ pub struct Target {
 pub fn resolve(v: &Value) -> Result<Target, ActError> {
     let n = parse_elem_ref(v).ok_or_else(|| bad("'ref' must look like \"e12\" (from observe)"))?;
     let name = format!("e{n}");
-    let (win, el, rid, password) = with_table(|t| {
+    let (win, el, rid, password, virt) = with_table(|t| {
         t.refs
             .get(&n)
-            .map(|e| (e.win, e.el.clone(), e.rid.clone(), e.password))
+            .map(|e| (e.win, e.el.clone(), e.rid.clone(), e.password, e.virt))
     })
     .ok_or_else(|| stale(&name))?;
     let window = win as HWND;
@@ -771,6 +798,25 @@ pub fn resolve(v: &Value) -> Result<Target, ActError> {
         return Err(winmgr::elevation_required("this element"));
     }
     uia()?;
+    if virt {
+        // A virtualised row found with find(deep): make it real now (this may scroll the
+        // list to it), then act on it.
+        unsafe {
+            if let Ok(vp) =
+                el.0.GetCurrentPatternAs::<IUIAutomationVirtualizedItemPattern>(
+                    UIA_VirtualizedItemPatternId,
+                )
+            {
+                vp.Realize()
+                    .map_err(|e| com_err("realizing the list row", e))?;
+            }
+        }
+        return Ok(Target {
+            el,
+            window,
+            password,
+        });
+    }
     // Alive and still the same element?
     let pid = unsafe { el.0.CurrentProcessId() };
     let now = identity_now(&el.0);
@@ -938,7 +984,9 @@ fn observe(p: &Value) -> Result<Value, ActError> {
             .filter(|n| (1..=500).contains(n))
             .ok_or_else(|| bad("'max_elements' must be 1..=500"))? as usize,
     };
+    let ts = Instant::now();
     let nodes = snapshot(h, true)?;
+    let snapshot_ms = ts.elapsed().as_millis() as u64;
     let ranks: Vec<Option<u8>> = nodes
         .iter()
         .enumerate()
@@ -1013,6 +1061,7 @@ fn observe(p: &Value) -> Result<Value, ActError> {
         "opaque": opaque,
         "diff": is_diff,
         "ms": t0.elapsed().as_millis() as u64,
+        "snapshot_ms": snapshot_ms,
     }))
 }
 
@@ -1076,15 +1125,50 @@ fn find(p: &Value) -> Result<Value, ActError> {
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| bad("'query' (non-empty text) is required"))?;
+    let deep = match p.get("deep") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad("'deep' must be true or false")),
+    };
+    let budget = match p.get("timeout_ms") {
+        None | Some(Value::Null) => DEEP_BUDGET,
+        Some(v) => Duration::from_millis(
+            v.as_u64()
+                .filter(|&n| n <= 15_000)
+                .ok_or_else(|| bad("'timeout_ms' must be 0..=15000"))?,
+        ),
+    };
     let h = target_window(p)?;
-    let nodes = snapshot(h, false)?;
+    let mut nodes = snapshot(h, false)?;
+    let mut deep_note = String::new();
+    if deep {
+        let orig = p["query"].as_str().unwrap_or("").trim().to_string();
+        let t0 = Instant::now();
+        let (extra, scanned, exact) = deep_items(&nodes, &orig, &q, budget);
+        deep_note = if exact {
+            "; deep: exact name".to_string()
+        } else {
+            format!(
+                "; deep: scanned {scanned} rows in {} ms{}",
+                t0.elapsed().as_millis(),
+                if t0.elapsed() >= budget {
+                    " (time budget reached: raise timeout_ms or use the exact name)"
+                } else {
+                    ""
+                }
+            )
+        };
+        nodes.extend(extra);
+    }
     let win = h as usize;
     let mut out = Vec::new();
     let mut total = 0;
     with_table(|t| {
         for n in nodes.iter().skip(1) {
             let i = &n.info;
-            if i.rect.2 <= 0 && i.rect.3 <= 0 {
+            let empty = i.rect.2 <= 0 && i.rect.3 <= 0;
+            // Rows scrolled out of a list have no rectangle but are real rows (ADR 0034).
+            if empty && !n.virt && !ROW_ROLES.contains(&i.role) {
                 continue;
             }
             let hit = i.name.to_lowercase().contains(&q)
@@ -1095,7 +1179,9 @@ fn find(p: &Value) -> Result<Value, ActError> {
                 if out.len() < 20 {
                     let r = t.ref_for(win, n);
                     let mut l = format!("e{r} {}", i.line());
-                    if i.offscreen {
+                    if n.virt {
+                        l.push_str(" (virtualized: realized when used)");
+                    } else if i.offscreen || empty {
                         l.push_str(" (offscreen)");
                     }
                     out.push(l);
@@ -1106,11 +1192,91 @@ fn find(p: &Value) -> Result<Value, ActError> {
     });
     let mut text = out.join("\n");
     text.push_str(&format!(
-        "\n-- {total} matches in {}{}",
+        "\n-- {total} matches in {}{}{deep_note}",
         winmgr::window_ref(h),
         if total > 20 { " (first 20)" } else { "" }
     ));
     Ok(json!({"text": text.trim_start(), "matches": total}))
+}
+
+const ROW_ROLES: &[&str] = &["ListItem", "DataItem", "TreeItem"];
+const CONTAINER_ROLES: &[&str] = &["List", "DataGrid", "Tree", "Table"];
+const DEEP_BUDGET: Duration = Duration::from_secs(3);
+const DEEP_MAX_ITEMS: usize = 20_000;
+
+/// Rows of virtualised containers that are not in the UIA tree yet (find deep, ADR 0034):
+/// ItemContainerPattern lookup by exact name first, then a bounded walk over the items
+/// comparing names. Placeholders are not realised here (no scrolling during a find).
+fn deep_items(nodes: &[Node], orig: &str, q: &str, budget: Duration) -> (Vec<Node>, usize, bool) {
+    use windows::Win32::System::Variant::{VariantClear, VARIANT, VT_BSTR};
+    let Ok(u) = uia() else {
+        return (Vec::new(), 0, false);
+    };
+    let known: std::collections::HashSet<Vec<i32>> = nodes.iter().map(|n| n.rid.clone()).collect();
+    let mut seen: std::collections::HashSet<String> = nodes
+        .iter()
+        .filter(|n| ROW_ROLES.contains(&n.info.role))
+        .map(|n| n.info.name.to_lowercase())
+        .collect();
+    let deadline = Instant::now() + budget;
+    let mut scanned = 0usize;
+    let mut out: Vec<Node> = Vec::new();
+    let mut add = |e: &IUIAutomationElement, out: &mut Vec<Node>| {
+        let Ok(c) = (unsafe { e.BuildUpdatedCache(&u.cache_one) }) else {
+            return;
+        };
+        let mut n = node(c);
+        if known.contains(&n.rid) || !seen.insert(n.info.name.to_lowercase()) {
+            return;
+        }
+        n.virt = true;
+        out.push(n);
+    };
+    for c in nodes
+        .iter()
+        .filter(|n| CONTAINER_ROLES.contains(&n.info.role))
+    {
+        let Ok(ic) = (unsafe {
+            c.el.0
+                .GetCurrentPatternAs::<IUIAutomationItemContainerPattern>(
+                    UIA_ItemContainerPatternId,
+                )
+        }) else {
+            continue;
+        };
+        unsafe {
+            // 1. exact name
+            let mut v = VARIANT::default();
+            (*v.Anonymous.Anonymous).vt = VT_BSTR;
+            (*v.Anonymous.Anonymous).Anonymous.bstrVal =
+                std::mem::ManuallyDrop::new(windows::core::BSTR::from(orig));
+            let exact =
+                ic.FindItemByProperty(None::<&IUIAutomationElement>, UIA_NamePropertyId, &v);
+            let _ = VariantClear(&mut v);
+            if let Ok(e) = exact {
+                add(&e, &mut out);
+                return (out, 0, true);
+            }
+            // 2. bounded walk comparing names
+            let empty = VARIANT::default();
+            let mut prev: Option<IUIAutomationElement> = None;
+            for _ in 0..DEEP_MAX_ITEMS {
+                if Instant::now() > deadline || out.len() >= 20 {
+                    break;
+                }
+                let Ok(e) = ic.FindItemByProperty(prev.as_ref(), UIA_PROPERTY_ID(0), &empty) else {
+                    break;
+                };
+                scanned += 1;
+                let name = e.CurrentName().map(|b| b.to_string()).unwrap_or_default();
+                if name.to_lowercase().contains(q) {
+                    add(&e, &mut out);
+                }
+                prev = Some(e);
+            }
+        }
+    }
+    (out, scanned, false)
 }
 
 const MAX_TEXT: usize = 20_000;
@@ -1463,7 +1629,26 @@ pub fn click_background(t: &Target) -> Result<Option<Value>, ActError> {
             "Wait until it is enabled (observe shows (off)).",
         ));
     }
+    // A click on a list/tree row selects it; Invoke on a row means "open" (a file in
+    // Explorer, ADR 0035), which a single click never does.
+    let ct = unsafe { t.el.0.CurrentControlType() }
+        .map(|c| c.0)
+        .unwrap_or(0);
+    let row = matches!(
+        ct,
+        x if x == UIA_ListItemControlTypeId.0
+            || x == UIA_DataItemControlTypeId.0
+            || x == UIA_TreeItemControlTypeId.0
+    );
     let res = keep_foreground(t.window, || unsafe {
+        if row {
+            if let Some(p) =
+                t.pattern::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
+            {
+                p.Select().map_err(|e| com_err("select", e))?;
+                return Ok(Some("select"));
+            }
+        }
         if let Some(p) = t.pattern::<IUIAutomationInvokePattern>(UIA_InvokePatternId) {
             p.Invoke().map_err(|e| com_err("invoke", e))?;
             return Ok(Some("invoke"));

@@ -1,4 +1,4 @@
-// XtraOS Testbed — a window with known controls for interactive input tests (ADR 0010).
+﻿// XtraOS Testbed — a window with known controls for interactive input tests (ADR 0010).
 // Compiled with the .NET Framework csc.exe that ships with Windows (C# 5). Per-monitor DPI
 // aware v2, so every rectangle it reports is in physical screen pixels, like the core.
 //
@@ -6,7 +6,7 @@
 // Started with "--control": control channel on stdin/stdout. Without it: a normal app.
 //   rects  -> {"hwnd":N,"controls":{"btnA":[x,y,w,h],...}}
 //   state  -> {"clicks":{...},"pad":[...],"text":"...","multi":"...","passwordLen":N,
-//              "listTop":N,"dropped":"...","path":{...},"keys":[...]}
+//              "listTop":N,"listSel":"...","dropped":"...","path":{...},"keys":[...]}
 //   reset  -> {"ok":true}        quit -> {"ok":true} and exits
 //   fillpassword -> puts a known secret in the password box (M4 masking test, no typing)
 // "--opaque": a single custom-painted surface with no accessible controls (M4 opaque test).
@@ -206,7 +206,7 @@ class Testbed : Form, ICommandable
         sb.Append(",\"text\":").Append(Str(text.Text));
         sb.Append(",\"multi\":").Append(Str(multi.Text));
         sb.Append(",\"passwordLen\":").Append(password.Text.Length);
-        sb.Append(",\"listTop\":").Append(list.TopIndex);
+        sb.Append(",\"listTop\":").Append(list.TopIndex); sb.Append(",\"listSel\":").Append(Str(list.SelectedItem as string ?? ""));
         sb.Append(",\"dropped\":").Append(Str(dropped));
         sb.Append(",\"path\":{\"count\":").Append(pathCount)
           .Append(",\"first\":[").Append(pathFirst.X).Append(',').Append(pathFirst.Y)

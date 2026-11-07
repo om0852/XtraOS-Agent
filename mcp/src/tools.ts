@@ -209,10 +209,18 @@ export const TOOLS: ToolDef[] = [
     name: 'find',
     description:
       'Finds elements in a window (default foreground) whose name, role or automation id contains `query`, ' +
-      'including ones scrolled out of view; returns up to 20 refs.',
+      'including list rows scrolled out of view (marked offscreen); returns up to 20 refs. deep=true also searches ' +
+      'virtualised lists (e.g. Explorer folders with thousands of files) through the list itself: an exact name is fast, ' +
+      'a partial name scans rows for up to timeout_ms (default 3000). Such rows are marked virtualized and are brought ' +
+      'into view only when you act on the ref. click(ref) on a list row selects it (it never opens the item).',
     inputSchema: {
       type: 'object',
-      properties: { query: { type: 'string', minLength: 1 }, window: WINDOW_REQ },
+      properties: {
+        query: { type: 'string', minLength: 1 },
+        window: WINDOW_REQ,
+        deep: { type: 'boolean', description: 'Also search virtualised list rows (slower)' },
+        timeout_ms: { type: 'integer', minimum: 0, maximum: 15000, description: 'deep: scan budget (default 3000)' },
+      },
       required: ['query'],
       additionalProperties: false,
     },

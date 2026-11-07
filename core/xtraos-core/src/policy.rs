@@ -236,14 +236,161 @@ const DELETE_WORDS: &[&str] = &[
     "format",
 ];
 
+// Localised words (ADR 0034): Hindi (Devanagari + common romanised forms), Marathi, Spanish,
+// French, German, Portuguese. Same exact-name rule as the English lists.
+const SEND_WORDS_INTL: &[&str] = &[
+    "भेजें",
+    "भेजो",
+    "भेज दें",
+    "भेजिए",
+    "संदेश भेजें",
+    "जमा करें",
+    "उत्तर दें",
+    "जवाब दें",
+    "साझा करें",
+    "शेयर करें",
+    "पोस्ट करें",
+    "प्रकाशित करें",
+    "आगे भेजें",
+    "bhejo",
+    "bhejein",
+    "bheje",
+    "bhej do",
+    "send karo",
+    "पाठवा",
+    "उत्तर द्या",
+    "शेअर करा",
+    "सबमिट करा",
+    "enviar",
+    "enviar mensaje",
+    "responder",
+    "responder a todos",
+    "reenviar",
+    "publicar",
+    "compartir",
+    "envoyer",
+    "répondre",
+    "répondre à tous",
+    "transférer",
+    "publier",
+    "partager",
+    "soumettre",
+    "senden",
+    "absenden",
+    "abschicken",
+    "antworten",
+    "allen antworten",
+    "weiterleiten",
+    "veröffentlichen",
+    "teilen",
+    "encaminhar",
+    "compartilhar",
+    "partilhar",
+    "enviar mensagem",
+];
+const PURCHASE_WORDS_INTL: &[&str] = &[
+    "खरीदें",
+    "अभी खरीदें",
+    "भुगतान करें",
+    "ऑर्डर करें",
+    "ऑर्डर दें",
+    "ऑर्डर प्लेस करें",
+    "kharido",
+    "kharidein",
+    "abhi kharidein",
+    "खरेदी करा",
+    "आता खरेदी करा",
+    "पेमेंट करा",
+    "ऑर्डर करा",
+    "comprar",
+    "comprar ahora",
+    "pagar",
+    "pagar ahora",
+    "realizar pedido",
+    "finalizar compra",
+    "tramitar pedido",
+    "suscribirse",
+    "acheter",
+    "acheter maintenant",
+    "payer",
+    "commander",
+    "passer la commande",
+    "valider la commande",
+    "kaufen",
+    "jetzt kaufen",
+    "bezahlen",
+    "bestellen",
+    "jetzt bestellen",
+    "zahlungspflichtig bestellen",
+    "kostenpflichtig bestellen",
+    "zur kasse",
+    "abonnieren",
+    "comprar agora",
+    "fazer pedido",
+    "finalizar pedido",
+    "assinar",
+];
+const DELETE_WORDS_INTL: &[&str] = &[
+    "हटाएं",
+    "हटाएँ",
+    "मिटाएं",
+    "मिटाएँ",
+    "डिलीट करें",
+    "स्थायी रूप से हटाएं",
+    "hatao",
+    "mitao",
+    "delete karo",
+    "हटवा",
+    "काढून टाका",
+    "डिलीट करा",
+    "eliminar",
+    "borrar",
+    "eliminar permanentemente",
+    "vaciar papelera",
+    "desinstalar",
+    "supprimer",
+    "supprimer définitivement",
+    "effacer",
+    "vider la corbeille",
+    "désinstaller",
+    "löschen",
+    "endgültig löschen",
+    "entfernen",
+    "papierkorb leeren",
+    "deinstallieren",
+    "excluir",
+    "apagar",
+    "excluir permanentemente",
+    "esvaziar lixeira",
+    "remover",
+];
+
 /// True if the element name *is* one of the words (ignoring case, punctuation, a trailing
-/// count like "Send (2)"), so "Sender list" or "Paypal settings" do not match.
+/// count like "Send (2)"), so "Sender list" or "Paypal settings" do not match. Combining marks
+/// (Devanagari vowel signs) are kept: they are part of the word.
 pub fn name_is(name: &str, words: &[&str]) -> bool {
     let clean: String = name
         .to_lowercase()
         .chars()
         .map(|c| {
-            if c.is_alphanumeric() || c == ' ' {
+            let mark_or_letter = !c.is_ascii()
+                && !c.is_whitespace()
+                && !matches!(
+                    c,
+                    '।' | '॥'
+                        | '“'
+                        | '”'
+                        | '‘'
+                        | '’'
+                        | '…'
+                        | '–'
+                        | '—'
+                        | '«'
+                        | '»'
+                        | '¡'
+                        | '¿'
+                );
+            if c.is_alphanumeric() || c == ' ' || mark_or_letter {
                 c
             } else {
                 ' '
@@ -305,13 +452,13 @@ pub fn classify(f: &Facts) -> Vec<(Class, String)> {
     let acts = INPUT_METHODS.contains(&m);
     if let Some(name) = &f.element {
         if m == "click" || m == "set_value" || m == "browser:click" {
-            if name_is(name, SEND_WORDS) {
+            if name_is(name, SEND_WORDS) || name_is(name, SEND_WORDS_INTL) {
                 out.push((Class::MessageSend, format!("\"{name}\"")));
             }
-            if name_is(name, PURCHASE_WORDS) {
+            if name_is(name, PURCHASE_WORDS) || name_is(name, PURCHASE_WORDS_INTL) {
                 out.push((Class::Purchase, format!("\"{name}\"")));
             }
-            if name_is(name, DELETE_WORDS) {
+            if name_is(name, DELETE_WORDS) || name_is(name, DELETE_WORDS_INTL) {
                 out.push((Class::Delete, format!("\"{name}\"")));
             }
         }
@@ -756,5 +903,38 @@ mod tests {
         assert!(name_is("Reply all", SEND_WORDS));
         assert!(!name_is("Send to OneNote settings", SEND_WORDS));
         assert!(name_is("Buy now", PURCHASE_WORDS));
+    }
+
+    #[test]
+    fn localised_words_match_exactly() {
+        for (n, w) in [
+            ("भेजें", SEND_WORDS_INTL),
+            ("Bhejo", SEND_WORDS_INTL),
+            ("पाठवा", SEND_WORDS_INTL),
+            ("Enviar", SEND_WORDS_INTL),
+            ("Envoyer (2)", SEND_WORDS_INTL),
+            ("Senden", SEND_WORDS_INTL),
+            ("अभी खरीदें", PURCHASE_WORDS_INTL),
+            ("Jetzt kaufen", PURCHASE_WORDS_INTL),
+            ("Comprar agora!", PURCHASE_WORDS_INTL),
+            ("Passer la commande", PURCHASE_WORDS_INTL),
+            ("हटाएं", DELETE_WORDS_INTL),
+            ("Löschen", DELETE_WORDS_INTL),
+            ("Supprimer définitivement", DELETE_WORDS_INTL),
+        ] {
+            assert!(name_is(n, w), "{n}");
+        }
+        // Exact names only: longer labels that merely contain a word do not count.
+        assert!(!name_is("भेजें गए संदेश", SEND_WORDS_INTL), "sent-items folder");
+        assert!(!name_is("Enviados", SEND_WORDS_INTL));
+        assert!(!name_is("Kaufen Sie mehr Speicher", PURCHASE_WORDS_INTL));
+        assert!(!name_is("Papierkorb", DELETE_WORDS_INTL));
+        // The policy uses them.
+        let f = Facts {
+            method: "click".into(),
+            element: Some("अभी खरीदें".into()),
+            ..Default::default()
+        };
+        assert!(classify(&f).iter().any(|(c, _)| *c == Class::Purchase));
     }
 }

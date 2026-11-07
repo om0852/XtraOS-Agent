@@ -38,6 +38,7 @@ press **Ctrl+Alt+Esc**.
 - Sending messages, deleting, system settings and admin launches ask you first; payments and
   password entry are always refused; password managers are off limits.
 - A banner at the top of the screen shows what the agent is doing.
+- Tray icon → **Rules and activity…** shows your rules and what the agent did recently (read only).
 - Your rules: `%LOCALAPPDATA%\XtraOS\policy.json`. Action log: `%LOCALAPPDATA%\XtraOS\logs`.
 
 ## Uninstall

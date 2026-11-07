@@ -309,6 +309,13 @@ for (const id of pick) {
   await mcp.init();
   const f = new Flow(mcp, id, FLOWS[id][0]);
   try { await FLOWS[id][1](f); } catch (e) { f.expect(false, `exception: ${e.message}`); }
+  // Close whatever this flow opened and left behind (e.g. after a failed step); never the
+  // user's windows (ADR 0028). Not part of the recorded transcript.
+  try {
+    const c = await mcp.rpc('tools/call', { name: 'cleanup', arguments: {} }, 20_000);
+    const t = (c.result?.content ?? []).map((x) => x.text ?? '').join(' ');
+    if (!/^closed 0:/.test(t)) console.log(`  cleanup after ${id}: ${t.replace(/\n/g, ' / ')}`);
+  } catch { /* core gone */ }
   summary.push(f.write());
   console.log(`${f.ok ? 'PASS' : 'FAIL'} ${id} ${FLOWS[id][0]} (${f.steps.length} calls)${f.notes.length ? '\n  ' + f.notes.join('\n  ') : ''}`);
   mcp.close();

@@ -10,12 +10,12 @@
 - Windows Agent Workspace spike: run the core inside Microsoft's separate agent session/account
   so the agent works in parallel with the user (preview in 2025–26; re-evaluate when GA) — ADR 0014, Phase 3
 - Sandbox mode: run tasks inside Windows Sandbox / a Hyper-V VM (own cursor, no user apps) — ADR 0014, Phase 3
-- Scoped / incremental observe (`scope_ref` subtree, per-window cache) for windows with hundreds of list items (Explorer, big lists): M4 measured 283–698 ms p50 there vs 120 ms budget — ADR 0016, Phase 2
-- Virtualised list items (ItemContainer / VirtualizedItem patterns) so `find` + `scroll(ref)` reach rows outside the viewport — ADR 0016, Phase 2
-- Localised policy name heuristics (Send/Buy/Delete in other languages) — ADR 0018, Phase 2
-- Tray policy editor + action-log viewer (separate app) — ADR 0017, Phase 2
-- Find the source of system input events seen during hands-off runs (ADR 0016 f4, ADR 0018 f1) — Phase 2
 - Code signing for releases: choose a licence + apply to SignPath Foundation, or an owner certificate (`build-release.ps1 -CertThumbprint`) — ADR 0019/0020
 - Fresh-machine install test incl. Smart App Control on (Windows Sandbox/VM) — ADR 0020
 - Flow F6 with real Claude Code once installed on the test PC — ADR 0020
-- `type` latency on more apps (fast fields vs the 150 ms budget) — ADR 0020, Phase 2
+- `type` latency on more apps: bench row for the Run box added (ADR 0035); record it in the next hands-off bench run
+- Policy *editor* (writing rules from a UI, with the same approval dialog); the read-only viewer exists (ADR 0035)
+- Faster observe on windows with thousands of items: provider-bound (ADR 0035 f2); revisit with UIA event-driven caching
+
+## Done in Phase 2 (moved out)
+Scoped observe (P2-M1), virtualised/off-screen list rows, localised Send/Buy/Delete words, read-only rules + activity viewer, input-source census (P2-M7, ADR 0035).

@@ -21,5 +21,6 @@ pub mod policy;
 pub mod protocol;
 pub mod safety;
 pub mod skills;
+pub mod viewer;
 pub mod winmgr;
 pub mod winsec;

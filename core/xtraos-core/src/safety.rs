@@ -78,6 +78,7 @@ const WM_TRAY: u32 = WM_APP + 10;
 pub const ID_STOP: usize = 1001;
 pub const ID_RESUME: usize = 1002;
 pub const ID_QUIT: usize = 1003;
+pub const ID_VIEWER: usize = 1004;
 const HOTKEY_ID: i32 = 1;
 const OVERLAY_TIMER: usize = 1;
 pub const PROMPT_BUTTON_BASE: i32 = 100;
@@ -159,10 +160,81 @@ fn mark_user() {
     USER_TICK.store(now.max(1), Ordering::Relaxed);
 }
 
+// Input census (ADR 0034 item 7): what the hooks see, for finding the source of input
+// events during hands-off runs. Counters only; no keys, no positions are kept.
+pub(crate) mod census {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
+    pub static KB_REAL: AtomicU32 = AtomicU32::new(0);
+    pub static KB_OURS: AtomicU32 = AtomicU32::new(0);
+    pub static KB_FOREIGN_INJECTED: AtomicU32 = AtomicU32::new(0);
+    pub static MOVE_JITTER: AtomicU32 = AtomicU32::new(0);
+    pub static MOVE_BIG: AtomicU32 = AtomicU32::new(0);
+    pub static BUTTONS_WHEEL: AtomicU32 = AtomicU32::new(0);
+    pub static MOUSE_OURS: AtomicU32 = AtomicU32::new(0);
+    pub static MOUSE_FOREIGN_INJECTED: AtomicU32 = AtomicU32::new(0);
+    /// Distinct dwExtraInfo tags of injected input from other programs (e.g. pen/touch
+    /// drivers use 0xFF5157xx).
+    pub static EXTRA: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    pub fn bump(c: &AtomicU32) {
+        c.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn tag(extra: usize) {
+        if let Ok(mut v) = EXTRA.try_lock() {
+            if !v.contains(&extra) && v.len() < 16 {
+                v.push(extra);
+            }
+        }
+    }
+}
+
+/// Clears the input census counters.
+pub fn reset_input_census() {
+    use census::*;
+    for c in [
+        &KB_REAL,
+        &KB_OURS,
+        &KB_FOREIGN_INJECTED,
+        &MOVE_JITTER,
+        &MOVE_BIG,
+        &BUTTONS_WHEEL,
+        &MOUSE_OURS,
+        &MOUSE_FOREIGN_INJECTED,
+    ] {
+        c.store(0, Ordering::Relaxed);
+    }
+    census::EXTRA
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+}
+
+/// What the low-level hooks saw since the last reset (counts only).
+pub fn input_census() -> Value {
+    use census::*;
+    let g = |c: &std::sync::atomic::AtomicU32| c.load(Ordering::Relaxed);
+    json!({
+        "hooks": HOOKS.load(Ordering::Relaxed),
+        "keyboard": {"real": g(&KB_REAL), "ours": g(&KB_OURS), "injected_by_others": g(&KB_FOREIGN_INJECTED)},
+        "mouse": {"jitter_moves": g(&MOVE_JITTER), "big_moves": g(&MOVE_BIG), "buttons_wheel": g(&BUTTONS_WHEEL),
+                  "ours": g(&MOUSE_OURS), "injected_by_others": g(&MOUSE_FOREIGN_INJECTED)},
+        "injector_tags": EXTRA.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|x| format!("{x:#x}")).collect::<Vec<_>>(),
+    })
+}
+
 unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if code >= 0 {
         let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
         let injected = k.flags.0 & LLKHF_INJECTED.0 != 0;
+        let ours = injected && input::recently_injected();
+        if ours {
+            census::bump(&census::KB_OURS);
+        } else if injected {
+            census::bump(&census::KB_FOREIGN_INJECTED);
+            census::tag(k.dwExtraInfo);
+        } else {
+            census::bump(&census::KB_REAL);
+        }
         if !injected || !input::recently_injected() {
             mark_user();
         }
@@ -174,13 +246,24 @@ unsafe extern "system" fn mouse_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
     if code >= 0 {
         let m = &*(lp.0 as *const MSLLHOOKSTRUCT);
         let injected = m.flags & LLMHF_INJECTED != 0;
+        if injected && input::recently_injected() {
+            census::bump(&census::MOUSE_OURS);
+        } else if injected {
+            census::bump(&census::MOUSE_FOREIGN_INJECTED);
+            census::tag(m.dwExtraInfo);
+        }
         if !injected || !input::recently_injected() {
             let mut a = ANCHOR.lock().unwrap_or_else(|e| e.into_inner());
             if wp.0 as u32 == WM_MOUSEMOVE {
-                if a.0 == i32::MIN
+                let far = a.0 == i32::MIN
                     || (m.pt.x - a.0).abs() > JITTER_PX
-                    || (m.pt.y - a.1).abs() > JITTER_PX
-                {
+                    || (m.pt.y - a.1).abs() > JITTER_PX;
+                census::bump(if far {
+                    &census::MOVE_BIG
+                } else {
+                    &census::MOVE_JITTER
+                });
+                if far {
                     if a.0 != i32::MIN {
                         mark_user();
                     }
@@ -188,6 +271,7 @@ unsafe extern "system" fn mouse_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
                 }
             } else {
                 // buttons, wheel: always the user
+                census::bump(&census::BUTTONS_WHEEL);
                 *a = (m.pt.x, m.pt.y);
                 mark_user();
             }
@@ -1128,6 +1212,7 @@ unsafe extern "system" fn ui_proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                 ID_STOP => stop(),
                 ID_RESUME => resume(),
                 ID_QUIT => quit(h),
+                ID_VIEWER => open_viewer(),
                 _ => {}
             }
             LRESULT(0)
@@ -1207,6 +1292,9 @@ unsafe fn tray_menu(h: WHWND) {
         ID_RESUME,
         PCWSTR(resume_label.as_ptr()),
     );
+    let viewer_label = wide("Rules and activity…");
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let _ = AppendMenuW(menu, MF_STRING, ID_VIEWER, PCWSTR(viewer_label.as_ptr()));
     let quit_label = wide("Quit XtraOS core");
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, PCWSTR(quit_label.as_ptr()));
@@ -1228,7 +1316,15 @@ unsafe fn tray_menu(h: WHWND) {
         ID_STOP => stop(),
         ID_RESUME => resume(),
         ID_QUIT => quit(h),
+        ID_VIEWER => open_viewer(),
         _ => {}
+    }
+}
+
+/// Tray "Rules and activity…": the read-only viewer in its own process (ADR 0034).
+fn open_viewer() {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::process::Command::new(exe).arg("--viewer").spawn();
     }
 }
 

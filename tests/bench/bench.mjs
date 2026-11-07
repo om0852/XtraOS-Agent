@@ -107,6 +107,33 @@ const typedOk = allOk;
 console.log(`typed text verified: ${typedOk}`);
 await call('close_window', { window: tb.ref });
 
+// 3b. type 50 chars into a classic Win32 edit: the Windows Run box (ADR 0034 item 6).
+try {
+  const run = await call('launch_app', { app: 'explorer.exe', args: 'shell:::{2559a1f3-21d7-11d4-bdaf-00c04f60b9f0}', timeout_ms: 10000 });
+  const rw = run.result;
+  if (!rw || !/run/i.test(rw.title)) throw new Error(`Run box not found (${JSON.stringify(run.error ?? rw?.title)})`);
+  const ro = await ok('find', { window: rw.ref, query: 'Edit' });
+  const box = ro.text.split('\n').find((l) => / Edit /.test(l))?.split(' ')[0];
+  const ascii50 = 'xtraos bench run box 0123456789 abcdefghijklmnopqr'.slice(0, 50);
+  const runMs = [];
+  let runOk = true;
+  for (let k = 0; k < 10; k++) {
+    await ok('set_value', { ref: box, value: '' });
+    await ok('focus_window', { window: rw.ref });
+    const t0 = process.hrtime.bigint();
+    await ok('type', { window: rw.ref, text: ascii50, idle_ms: 0 });
+    runMs.push(Number(process.hrtime.bigint() - t0) / 1e6);
+    const r = await ok('read_text', { ref: box });
+    if (r.text !== ascii50) runOk = false;
+  }
+  runMs.sort((a, b) => a - b);
+  row('type 50 chars into the Run box (Win32 edit)', { p50: runMs[5], p95: runMs[9], n: 10 }, 150, 400, `classic Win32 edit; read back ${runOk ? 'exact' : 'MISMATCH'}`);
+  await ok('set_value', { ref: box, value: '' });
+  await ok('press_keys', { window: rw.ref, keys: ['Escape'], idle_ms: 0 });
+} catch (e) {
+  console.log(`SKIP Run box typing row: ${e.message}`);
+}
+
 sock.end();
 core.kill();
 await sleep(300);

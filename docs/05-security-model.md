@@ -42,6 +42,10 @@ Browser bridge (ADR 0032): the core is the only XtraOS client of the XtraDevPilo
   Never script execution, cookies, storage, network mocks or file upload.
 - **Policy:** the target tab's host and title feed the same rules as desktop windows.
 
+Localised action words (ADR 0034): the Send / Buy / Delete name rules also recognise
+Hindi (Devanagari and common romanised forms), Marathi, Spanish, French, German and
+Portuguese labels. As in English, the whole name must be the word.
+
 Elevated admin helper (ADR 0030): opt-in per session, started only through a UAC prompt
 (nothing elevated is installed). One pipe connection, only from the core that started it
 (PID-checked both ways, squatting refused, same binary). The helper asks the user in its own

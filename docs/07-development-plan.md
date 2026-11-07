@@ -76,8 +76,13 @@ automated gate passes 11/11; it closes after the human F5 run with a real UAC pr
 through the XtraDevPilot bridge (loopback + token, an action allowlist, the same policy); the
 zip + install.ps1 package stays (no MSI). The automated gate passes 12/12. The live check
 needs an XtraDevPilot build that includes the bridge security fix.
-**Phase 2 build complete; open: the hands-off interactive regression, F5 with real UAC, and
-P2-BR-LIVE.**
+**P2-M7 Phase 2 leftovers: built** (ADRs 0034, 0035).
+- Off-screen and virtualised list rows can be found (`find deep`); clicking a row selects it.
+- Send/Buy/Delete words are recognised in Hindi, Marathi, Spanish, French, German and Portuguese.
+- A read-only rules and activity viewer.
+- Input census.
+- Automated gate: 13/13.
+**Phase 2 build complete.** Open: the hands-off interactive regression, F5 with real UAC, and P2-BR-LIVE.
 
 ## Phase 3 — Reach
 

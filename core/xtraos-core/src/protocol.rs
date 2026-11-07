@@ -21,11 +21,6 @@ const PLANNED_METHODS: &[&str] = &[
     "screenshot",
     "read_text",
     "find",
-    "list_windows",
-    "focus_window",
-    "launch_app",
-    "close_window",
-    "window_bounds",
     "set_value",
     "wait_for",
     "ask_human",
@@ -235,7 +230,7 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
             method,
         ),
         "pair" => invalid(&id, "already paired", &method),
-        m if crate::input::METHODS.contains(&m) => {
+        m if crate::input::METHODS.contains(&m) || crate::winmgr::METHODS.contains(&m) => {
             let params = if params.is_null() { json!({}) } else { params };
             if !params.is_object() {
                 return invalid(&id, "params must be an object", &method);

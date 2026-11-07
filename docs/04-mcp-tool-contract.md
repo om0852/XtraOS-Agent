@@ -30,13 +30,17 @@ USER_ACTIVE` (user held a button/modifier or moved the mouse — action aborted,
 
 ## Windows & apps
 
+M3 (ADR 0012): a window is referenced as `w<handle>` (e.g. `w460650`) or the integer handle.
+
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
-| `list_windows` | `filter?` | `w1 chrome.exe "Google - Chrome" focused` lines | P1 |
-| `focus_window` | `window` | ok | P1 |
-| `launch_app` | `app` (name/path/AUMID), `args?`, `elevated?` | window ref when it appears | P1 |
-| `close_window` | `window` | ok | P1 |
-| `window_bounds` | `window`, `x?,y?,w?,h?`, `state?` (min/max/restore) | bounds | P1 |
+| `list_windows` | `filter?` (substring of title or process) | `w460650 chrome.exe "Google - Chrome" 0,0 1920x1040 focused` lines | P1 (M3) |
+| `focus_window` | `window` | ok (else `NEEDS_HUMAN`) | P1 (M3) |
+| `launch_app` | `app` (name/path/AUMID), `args?`, `elevated?`, `timeout_ms?` | ref of the new window | P1 (M3) |
+| `close_window` | `window`, `timeout_ms?` | ok (graceful WM_CLOSE; else `NEEDS_HUMAN`) | P1 (M3) |
+| `window_bounds` | `window`, `x?,y?,w?,h?` (visible frame), `state?` (minimize/maximize/restore) | bounds + state | P1 (M3) |
+
+Input, close and bounds on an elevated window return `ELEVATION_REQUIRED` (ADR 0012).
 
 ## Input
 

@@ -8,9 +8,9 @@ import { McpClient, ROOT } from './helpers.ts';
 
 const contract = fs.readFileSync(path.join(ROOT, 'docs', '04-mcp-tool-contract.md'), 'utf8');
 const contractTools = new Set([...contract.matchAll(/^\|\s*`([a-z_]+)`\s*\|/gm)].map((m) => m[1]));
-const ALLOWED = ['click', 'clipboard', 'drag', 'mouse', 'press_keys', 'scroll', 'status', 'type'];
+const ALLOWED = ['click', 'clipboard', 'close_window', 'drag', 'focus_window', 'launch_app', 'list_windows', 'mouse', 'press_keys', 'scroll', 'status', 'type', 'window_bounds'];
 
-test('tools/list exposes exactly the built tools (M1 + M2)', async () => {
+test('tools/list exposes exactly the built tools (M1-M3)', async () => {
   const mcp = new McpClient({});
   try {
     await mcp.init();

@@ -61,7 +61,7 @@ impl Testbed {
             exe.display()
         );
         let mut child = Command::new(exe)
-            .args(["120", "120"])
+            .args(["120", "120", "--control"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

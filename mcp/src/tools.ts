@@ -1,6 +1,7 @@
 // The MCP tool surface. MUST match docs/04-mcp-tool-contract.md (a contract test enforces it).
 // M1: status. M2 (ADR 0010): click, type, press_keys, scroll, drag, mouse, clipboard.
-// Coordinates are physical screen pixels; `window` is a native window handle (integer).
+// M3 (ADR 0012): list_windows, focus_window, launch_app, close_window, window_bounds.
+// Coordinates are physical screen pixels; `window` is a ref like "w460650" or the integer handle.
 import type { CoreClient } from './core-client.ts';
 
 type Schema = { type: 'object'; properties: Record<string, unknown>; required?: string[]; additionalProperties: false };
@@ -13,7 +14,17 @@ export type ToolDef = {
 };
 
 const int = (description: string) => ({ type: 'integer', description });
-const WINDOW = int('Native window handle. Mouse: optional guard (point must be inside it). Keyboard: required and must be the foreground window.');
+const WINDOW = {
+  type: ['string', 'integer'],
+  description: 'Window ref from list_windows (e.g. "w460650") or its integer handle. Mouse: optional guard (point must be inside it). Keyboard: required and must be the foreground window.',
+};
+const WINDOW_REQ = { type: ['string', 'integer'], description: 'Window ref from list_windows (e.g. "w460650") or its integer handle' };
+
+type Win = { ref: string; process: string; title: string; x: number; y: number; w: number; h: number; state: string; focused: boolean; elevated: boolean };
+/** One compact line per window (docs/06 token budget). */
+const winLine = (w: Win) =>
+  `${w.ref} ${w.process} "${w.title.length > 80 ? w.title.slice(0, 79) + '…' : w.title}" ${w.x},${w.y} ${w.w}x${w.h}` +
+  `${w.state !== 'normal' ? ' ' + w.state : ''}${w.focused ? ' focused' : ''}${w.elevated ? ' elevated' : ''}`;
 const X = int('Screen X in physical pixels');
 const Y = int('Screen Y in physical pixels');
 const BUTTON = { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button (default left)' };
@@ -137,6 +148,74 @@ export const TOOLS: ToolDef[] = [
       additionalProperties: false,
     },
     run: forward('mouse', (r, a) => (a.action === 'path' ? `ok path ${r.points} points` : `ok ${a.action} at (${r.at[0]},${r.at[1]})`)),
+  },
+  {
+    name: 'list_windows',
+    description:
+      'Lists open top-level windows, front first: ref, process, title, position, size, state, focused, elevated. ' +
+      'Use the ref (e.g. "w460650") as `window` in other tools. Optional filter matches title or process.',
+    inputSchema: {
+      type: 'object',
+      properties: { filter: { type: 'string', description: 'Case-insensitive substring of title or process name' } },
+      additionalProperties: false,
+    },
+    run: forward('list_windows', (r) => {
+      const ws = r.windows as Win[];
+      return ws.length ? `${ws.length} window(s)\n` + ws.map(winLine).join('\n') : '0 windows';
+    }),
+  },
+  {
+    name: 'focus_window',
+    description: 'Brings a window to the front (restores it if minimised). NEEDS_HUMAN if Windows refuses.',
+    inputSchema: { type: 'object', properties: { window: WINDOW_REQ }, required: ['window'], additionalProperties: false },
+    run: forward('focus_window', (r) => `ok focused ${r.ref}`),
+  },
+  {
+    name: 'launch_app',
+    description:
+      'Starts an app and returns its NEW window ref. app = name ("notepad", "chrome", "firefox"), full path, or AUMID. ' +
+      'elevated=true asks the user via the Windows admin (UAC) prompt; admin windows cannot be controlled (ELEVATION_REQUIRED).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string' },
+        args: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Command-line arguments' },
+        elevated: { type: 'boolean' },
+        timeout_ms: { type: 'integer', minimum: 0, maximum: 60000, description: 'Wait for the window (default 15000)' },
+      },
+      required: ['app'],
+      additionalProperties: false,
+    },
+    run: forward('launch_app', (r) => `ok launched ${winLine(r as Win)}`),
+  },
+  {
+    name: 'close_window',
+    description: 'Asks a window to close (like clicking X; the app may ask to save → NEEDS_HUMAN). Never force-kills.',
+    inputSchema: {
+      type: 'object',
+      properties: { window: WINDOW_REQ, timeout_ms: { type: 'integer', minimum: 0, maximum: 60000 } },
+      required: ['window'],
+      additionalProperties: false,
+    },
+    run: forward('close_window', (r) => `ok closed ${r.ref}`),
+  },
+  {
+    name: 'window_bounds',
+    description:
+      'Gets a window position/size/state, or sets x/y/w/h (visible frame, physical pixels) and/or state ' +
+      '(minimize, maximize, restore).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        window: WINDOW_REQ,
+        x: X, y: Y,
+        w: { type: 'integer', minimum: 50 }, h: { type: 'integer', minimum: 50 },
+        state: { type: 'string', enum: ['minimize', 'maximize', 'restore'] },
+      },
+      required: ['window'],
+      additionalProperties: false,
+    },
+    run: forward('window_bounds', (r) => `${r.ref} ${r.x},${r.y} ${r.w}x${r.h} ${r.state}`),
   },
   {
     name: 'clipboard',

@@ -146,15 +146,21 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
         let (outcome, info) = match outcome {
             Outcome::Execute { id, method, params } => {
                 let m = method.clone();
-                let res = tokio::task::spawn_blocking(move || input::run(&m, &params))
-                    .await
-                    .unwrap_or_else(|e| {
-                        Err(input::ActError {
-                            code: "INTERNAL",
-                            message: format!("action panicked: {e}"),
-                            hint: "",
-                        })
-                    });
+                let res = tokio::task::spawn_blocking(move || {
+                    if crate::winmgr::METHODS.contains(&m.as_str()) {
+                        crate::winmgr::run(&m, &params)
+                    } else {
+                        input::run(&m, &params)
+                    }
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    Err(input::ActError {
+                        code: "INTERNAL",
+                        message: format!("action panicked: {e}"),
+                        hint: "",
+                    })
+                });
                 match res {
                     Ok(v) => (
                         Outcome::Reply(serde_json::json!({"jsonrpc":"2.0","id":id,"result":v})),

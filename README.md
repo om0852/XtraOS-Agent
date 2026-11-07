@@ -4,9 +4,10 @@ A local **AI action runtime**: the bridge that lets any AI model see and operate
 (apps, browsers, terminals, files, games) safely, fast, and token-efficiently.
 The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 
-> Status: **Phase 1 — M1 + M2 closed** (secure IPC, MCP, real input; ADRs 0009–0011).
-> **Next: M3 Windows & apps.** Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1`,
-> `tests/phase1/m2-gate.ps1` (`-Interactive` moves the mouse and types into the testbed).
+> Status: **Phase 1 — M1, M2, M3 closed** (secure IPC, MCP, real input, windows & apps;
+> ADRs 0009–0013). **Next: M4 Perception.** Gates: `tests/phase0/run-tests.ps1`,
+> `tests/phase1/m1-gate.ps1`, `m2-gate.ps1`, `m3-gate.ps1` (`-Interactive` moves the mouse and
+> types into the testbed; `-Uac` needs a human UAC click; `-Browsers` opens Chrome/Firefox).
 
 ## Documents
 
@@ -34,4 +35,7 @@ The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 | Real keyboard input: unicode typing (incl. Hindi, emoji), key chords | verified — M2 gate |
 | Clipboard get/set | verified — M2 gate |
 | Safety guards: user activity → abort, wrong window → refuse, no stuck keys/buttons | verified — M2 gate |
-| Window control, reading the screen | not yet (M3–M4) |
+| Window control: list, focus, launch (incl. admin via UAC), graceful close, move/resize/min/max | verified — M3 gate (ADR 0013) |
+| Elevation boundary: admin windows refused untouched (`ELEVATION_REQUIRED`) | verified — M3 gate |
+| Browser flow without extensions (Chrome, Firefox: search → close) | verified — M3 gate |
+| Reading the screen (UI tree, OCR, screenshots) | not yet (M4) |

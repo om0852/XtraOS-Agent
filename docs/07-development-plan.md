@@ -6,7 +6,9 @@
 (`tests/phase1/m1-gate.ps1`). Smart App Control turned off by the owner on this dev machine.
 **M2 Input: closed** (ADRs 0010, 0011) — gate 8/8 PASS incl. 11/11 interactive, hands-off run;
 `set_value` and Explorer→app drag
-(P1-IN-07) moved to M4. Only work on the current phase (see CLAUDE.md §3).
+(P1-IN-07) moved to M4.
+**M3 Windows & apps: closed** (ADRs 0012, 0013) — gate 9/9 PASS, 0 SKIP incl. UAC + browser
+flow F3. **Next: M4 Perception.** Only work on the current phase (see CLAUDE.md §3).
 Each milestone has exit criteria; a milestone is done only when all are met and evidenced.
 
 ## Phase 0 — Spikes & skeleton (≈ 1 week)

@@ -3,6 +3,7 @@
 // aware v2, so every rectangle it reports is in physical screen pixels, like the core.
 //
 // Control channel (one line per command on stdin, one JSON line per reply on stdout):
+// Started with "--control": control channel on stdin/stdout. Without it: a normal app.
 //   rects  -> {"hwnd":N,"controls":{"btnA":[x,y,w,h],...}}
 //   state  -> {"clicks":{...},"pad":[...],"text":"...","multi":"...","passwordLen":N,
 //              "listTop":N,"dropped":"...","path":{...},"keys":[...]}
@@ -31,8 +32,14 @@ static class Program
         int x = args.Length > 0 ? int.Parse(args[0]) : 120;
         int y = args.Length > 1 ? int.Parse(args[1]) : 120;
         var form = new Testbed(new Point(x, y));
+        // The stdin control channel is opt-in via "--control" (the test harness passes it).
+        // Without it (e.g. started by launch_app via ShellExecute) behave like a normal app and
+        // stay open until closed (ADR 0012). Console.IsInputRedirected is NOT usable here: in a
+        // winexe with no console the missing stdin handle counts as "redirected", ReadLine
+        // returns null at once and the window would close immediately (found by win01).
+        bool controlled = Array.IndexOf(args, "--control") >= 0;
         var reader = new Thread(() => ReadLoop(form)) { IsBackground = true };
-        form.Shown += delegate { reader.Start(); Out("{\"ready\":true}"); };
+        form.Shown += delegate { if (controlled) { reader.Start(); Out("{\"ready\":true}"); } };
         Application.Run(form);
     }
 

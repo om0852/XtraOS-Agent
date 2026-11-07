@@ -114,7 +114,6 @@ extern "system" {
     fn GetForegroundWindow() -> HWND;
     fn GetAsyncKeyState(vk: i32) -> i16;
     fn GetSystemMetrics(i: i32) -> i32;
-    fn IsWindow(h: HWND) -> i32;
     fn MapVirtualKeyW(code: u32, map: u32) -> u32;
     fn VkKeyScanW(ch: u16) -> i16;
     fn SetProcessDpiAwarenessContext(ctx: isize) -> i32;
@@ -328,8 +327,12 @@ impl MouseGuard {
     }
 
     fn check_target(&self, p: POINT, window: Option<HWND>) -> Result<(), ActError> {
+        let under = root_at(p);
+        if !under.is_null() && crate::winmgr::is_elevated(under) {
+            return Err(crate::winmgr::elevation_required("input at this point"));
+        }
         if let Some(w) = window.or(self.window) {
-            if root_at(p) != w {
+            if under != w {
                 return Err(err("TARGET_OBSCURED", format!("({},{}) is not inside the target window", p.x, p.y),
                     "The window may be covered, moved or minimised. Bring it to the front and re-read positions."));
             }
@@ -427,7 +430,7 @@ fn foreground_is(window: HWND) -> Result<(), ActError> {
         return Err(err(
             "NEEDS_HUMAN",
             "the target window is not the foreground window; no keys were sent",
-            "Click the window once (or use focus_window in M3), then retry.",
+            "Call focus_window first (or ask the user to click the window), then retry.",
         ));
     }
     Ok(())
@@ -638,18 +641,13 @@ fn window_arg(p: &Value, k: &str, required: bool) -> Result<Option<HWND>, ActErr
             "'{k}' (window handle) is required for keyboard input"
         ))),
         Some(v) => {
-            let h = v
-                .as_u64()
-                .ok_or_else(|| bad(format!("'{k}' must be a window handle (integer)")))?
-                as usize as HWND;
-            if unsafe { IsWindow(h) } == 0 {
-                return Err(err(
-                    "WINDOW_NOT_FOUND",
-                    format!("no window with handle {}", h as usize),
-                    "Re-read the window handle.",
-                ));
+            // "w123" or 123 (ADR 0012). UIPI would silently drop input into an elevated
+            // window, so refuse before anything is sent.
+            let h = crate::winmgr::resolve_window(v)?;
+            if crate::winmgr::is_elevated(h) {
+                return Err(crate::winmgr::elevation_required("input"));
             }
-            Ok(Some(unsafe { GetAncestor(h, GA_ROOT) }))
+            Ok(Some(h))
         }
     }
 }

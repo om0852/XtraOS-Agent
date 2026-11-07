@@ -29,9 +29,10 @@ use windows::Win32::Graphics::Gdi::{
     OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, SetFocus, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_ESCAPE,
+    GetFocus, RegisterHotKey, SetFocus, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_ESCAPE,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
@@ -228,6 +229,11 @@ unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
         let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
         let injected = k.flags.0 & LLKHF_INJECTED.0 != 0;
         let ours = injected && input::recently_injected();
+        // A real Enter/Space press (not injected by any program) can confirm a focused
+        // dialog button (ADR 0041).
+        if !injected && matches!(k.vkCode, 0x0D | 0x20) {
+            REAL_KEY_TICK.store(unsafe { GetTickCount() }.max(1), Ordering::Relaxed);
+        }
         if ours {
             census::bump(&census::KB_OURS);
         } else if injected {
@@ -247,6 +253,12 @@ unsafe extern "system" fn mouse_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
     if code >= 0 {
         let m = &*(lp.0 as *const MSLLHOOKSTRUCT);
         let injected = m.flags & LLMHF_INJECTED != 0;
+        // A real left click (not injected by any program): where and when, so an approval
+        // button can check it was really clicked by the user (ADR 0041).
+        if !injected && wp.0 as u32 == WM_LBUTTONUP {
+            *REAL_CLICK.lock().unwrap_or_else(|e| e.into_inner()) =
+                (unsafe { GetTickCount() }.max(1), m.pt.x, m.pt.y);
+        }
         if injected && input::recently_injected() {
             census::bump(&census::MOUSE_OURS);
         } else if injected {
@@ -1692,15 +1704,39 @@ unsafe fn create_prompt(id: u64) {
 }
 
 static SYNTHETIC_OK: AtomicBool = AtomicBool::new(false);
+/// Last real (non-injected) left-button release: (tick, x, y); and last real Enter/Space.
+static REAL_CLICK: Mutex<(u32, i32, i32)> = Mutex::new((0, 0, 0));
+static REAL_KEY_TICK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const REAL_INPUT_WINDOW_MS: u32 = 1500;
 
 /// Unelevated test-mode admin helper only (it has no extra power): accept synthetic answers.
 pub fn allow_synthetic_answers() {
     SYNTHETIC_OK.store(true, Ordering::SeqCst);
 }
 
-/// True if the input message being processed comes from a real device (ADR 0041).
-fn from_hardware_input() -> bool {
+/// True if the user really pressed this button (ADR 0041): the safety hooks saw a real,
+/// non-injected left click inside the button within the last moment, or a real Enter/Space
+/// press, or Windows reports the current input message as hardware. Clicks faked by other
+/// programs (BM_CLICK, posted WM_COMMAND, SendInput) satisfy none of these.
+fn from_hardware_input(button: WHWND) -> bool {
     if SYNTHETIC_OK.load(Ordering::SeqCst) {
+        return true;
+    }
+    let now = unsafe { GetTickCount() };
+    let (t, x, y) = *REAL_CLICK.lock().unwrap_or_else(|e| e.into_inner());
+    if t != 0 && now.wrapping_sub(t) <= REAL_INPUT_WINDOW_MS {
+        let mut r = RECT::default();
+        if unsafe { GetWindowRect(button, &mut r) }.is_ok()
+            && x >= r.left
+            && x < r.right
+            && y >= r.top
+            && y < r.bottom
+        {
+            return true;
+        }
+    }
+    let k = REAL_KEY_TICK.load(Ordering::Relaxed);
+    if k != 0 && now.wrapping_sub(k) <= REAL_INPUT_WINDOW_MS && unsafe { GetFocus() } == button {
         return true;
     }
     #[repr(C)]
@@ -1779,7 +1815,7 @@ unsafe extern "system" fn prompt_proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM
                     // Only the safe answer may come from anywhere; any other answer must come
                     // from the user's real mouse/keyboard, never from another program's
                     // BM_CLICK / WM_COMMAND / SendInput (ADR 0041).
-                    if i as usize != cancel && !from_hardware_input() {
+                    if i as usize != cancel && !from_hardware_input(WHWND(lp.0 as _)) {
                         return LRESULT(0);
                     }
                     answer(id, i as usize);

@@ -69,7 +69,15 @@ Antigravity. It reported 8 findings. Each was checked against the code before fi
   still resumed through the now-blocked posted message. It was switched to the in-process
   call and re-run: 5/5. fmt, clippy and every non-interactive test pass after the change.
 - All suites now answer dialogs in-process.
-- **Not yet verified: a real hardware click on Allow.** If `GetCurrentInputMessageSource`
-  did not report hardware for it, approvals would fail closed (nothing approved), not open.
-  SEC-03 (an injected click is ignored) and one real Allow click by the owner settle it in
-  the hands-off session.
+- **The real-click check, revised after a live test with the owner (2026-11-07):**
+  - The first version trusted only `GetCurrentInputMessageSource` = hardware. **It rejected
+    the owner's real click** (it failed closed: nothing was approved).
+  - Now a "yes" counts when any of these holds:
+    - the safety hooks saw a **real, non-injected left click inside that button** within
+      1.5 s;
+    - a real Enter/Space press while the button has focus;
+    - Windows reports a hardware input message.
+  - The hooks already tell injected input apart (LLMHF_INJECTED / LLKHF_INJECTED). BM_CLICK
+    and posted messages produce no hook event, and SendInput is flagged as injected.
+  - Live result: the owner's real click on **Yes was accepted**. SEC-01/02 still pass.
+- Phase 3 gate (`-Automated`) on the final version: **15/15 PASS**.

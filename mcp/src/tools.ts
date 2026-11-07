@@ -7,6 +7,7 @@
 // kill switch (BLOCKED_BY_POLICY, STOPPED — only the user resumes, from the tray).
 // P2-M1 (ADR 0022): wait_for, batch, observe(scope_ref) — fewer agent round trips.
 // P2-M2 (ADR 0024): ocr — text with screen coordinates for opaque windows.
+// P2-M3 (ADR 0026): app_map, list_skills, run_skill.
 // Coordinates are physical screen pixels; `window` is a ref like "w460650" or the integer handle.
 import type { CoreClient } from './core-client.ts';
 
@@ -328,7 +329,7 @@ export const TOOLS: ToolDef[] = [
     description:
       'Runs up to 50 steps in one call, without a round trip per step: [{tool, args}] with tools click, type, ' +
       'press_keys, scroll, drag, mouse, set_value, clipboard, focus_window, window_bounds, launch_app, ' +
-      'close_window, wait_for, observe, find, read_text. Every step still passes the safety policy (approval ' +
+      'close_window, wait_for, observe, find, read_text, ocr, app_map, run_skill (built-in skills). Every step still passes the safety policy (approval ' +
       'dialogs, blocks) and the kill switch. Stops at the first error unless stop_on_error=false. Use it for ' +
       'known sequences (e.g. clicks by refs from one observe, then wait_for).',
     inputSchema: {
@@ -396,6 +397,56 @@ export const TOOLS: ToolDef[] = [
       additionalProperties: false,
     },
     run: forward('wait_for_human', (r) => `user: ${r.status}`),
+  },
+  {
+    name: 'app_map',
+    description:
+      'Where the user\'s apps and services are. op=scan (query?): installed apps (classic + Store) with launch ids ' +
+      '— use them with launch_app instead of guessing names. op=set (service, surface desktop|browser, location: ' +
+      'a launch id, or {browser, url, profile?}) remembers e.g. "whatsapp" or "gmail"; afterwards ' +
+      'launch_app("whatsapp") opens it. op=get/list/remove. Stored encrypted for this Windows user only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['scan', 'list', 'get', 'set', 'remove'] },
+        query: { type: 'string' },
+        service: { type: 'string', maxLength: 60 },
+        surface: { type: 'string', enum: ['desktop', 'browser'] },
+        location: { description: 'desktop: launch id/path (string); browser: {browser, url, profile?}' },
+      },
+      required: ['op'],
+      additionalProperties: false,
+    },
+    run: forward('app_map', (r, a) =>
+      r.text ?? (a.op === 'get' ? `${r.service}: ${r.surface} ${JSON.stringify(r.location)}`
+        : a.op === 'set' ? `ok saved ${r.service} (${r.entries} entries)` : `ok ${r.removed ? 'removed' : 'not present'} ${r.service}`)),
+  },
+  {
+    name: 'list_skills',
+    description:
+      'Lists skills: one call does a whole routine task. Built-in: files.list/open/mkdir/copy/move/rename/delete ' +
+      '(through the Windows shell; never overwrites; delete goes to the Recycle Bin after the user\'s OK; ' +
+      'system and XtraOS folders are protected). Plus the user\'s macro skills. app filters by prefix (e.g. "files").',
+    inputSchema: { type: 'object', properties: { app: { type: 'string' } }, additionalProperties: false },
+    run: forward('list_skills', (r) => r.text),
+  },
+  {
+    name: 'run_skill',
+    description:
+      'Runs a skill by name with its args (see list_skills), e.g. {name: "files.copy", args: {from: ["C:\\\\Users\\\\me\\\\a.pdf"], ' +
+      'to_dir: "C:\\\\Users\\\\me\\\\Desktop\\\\Reports"}}. Every action inside still passes the safety policy.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string', minLength: 1 }, args: { type: 'object' } },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    run: forward('run_skill', (r) => {
+      if (typeof r.text === 'string') return r.text;
+      if (Array.isArray(r.steps)) return `${r.ok ? 'ok' : 'stopped'} skill ${r.completed}/${r.total} steps`;
+      if (r.ref) return `ok opened ${r.ref} ${r.title ?? ''}`.trim();
+      return 'ok';
+    }),
   },
   {
     name: 'list_windows',

@@ -24,6 +24,18 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, ActError> {
         perceive::run(method, p)
     } else if input::METHODS.contains(&method) {
         input::run(method, p)
+    } else if method == "app_map" {
+        crate::appmap::run(p)
+    } else if method == "list_skills" {
+        crate::skills::list(p)
+    } else if method == "run_skill" {
+        // Inside a batch / macro: built-in skills only (no macro recursion).
+        if crate::skills::plan(p)?.is_macro {
+            return Err(bad(
+                "a macro skill cannot run inside a batch or another macro",
+            ));
+        }
+        crate::skills::run(p, &mut |_| {})
     } else {
         Err(bad(format!("'{method}' is not an OS method")))
     }
@@ -47,6 +59,9 @@ pub const BATCH_TOOLS: &[&str] = &[
     "observe",
     "find",
     "read_text",
+    "ocr",
+    "app_map",
+    "run_skill",
 ];
 
 pub const MAX_STEPS: usize = 50;

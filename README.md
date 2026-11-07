@@ -6,8 +6,8 @@ The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 
 > Status: **Phase 1 complete — Release 0.1 (unsigned developer preview)**, M1–M6 closed
 > (ADRs 0009–0020); **Phase 2: P2-M1 closed** (wait_for, batch, scoped observe; ADR 0023),
-> **P2-M2 closed** (OCR; ADR 0025), next P2-M3 app map + skills. Open: code signing and a fresh-machine test with Smart App Control on.
-> Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1`, `tests/phase2/p2m1-gate.ps1`, `p2m2-gate.ps1`
+> **P2-M2 closed** (OCR; ADR 0025), **P2-M3 closed** (app map, skills; ADR 0027), next P2-M4 messaging. Open: code signing and a fresh-machine test with Smart App Control on.
+> Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1`, `tests/phase2/p2m1-gate.ps1` … `p2m3-gate.ps1`
 > (`-Interactive` moves the mouse and types; keep hands off).
 
 ## Install (Release 0.1)
@@ -66,6 +66,9 @@ Recorded flows: [docs/flows](docs/flows/README.md) · Bench: [docs/bench/release
 | Routine task in ≤ 3 calls / ≤ 2,000 tokens (Calculator 7 + 5: 3 calls, ~335 tokens) | verified — P2-M1 gate ([R1](docs/flows/R1.md)) |
 | `ocr`: text + click-ready screen coordinates from opaque windows (games, canvas), Windows' built-in OCR, offline (~54 tokens vs ~2,225 for a screenshot) | verified — P2-M2 gate (ADR 0025, [F8](docs/flows/F8.md)) |
 | Locked screen / UAC prompt detected: actions return `NEEDS_HUMAN` instead of acting blind | verified — P2-M2 gate run |
+| App map: installed apps with launch ids; remembered services (DPAPI-encrypted); `launch_app("service")` | verified — P2-M3 gate (ADR 0027) |
+| Skills: file skills (copy/move/rename/mkdir/list/open; delete → Recycle Bin after your OK; system + XtraOS folders protected) and JSON macro skills (policy per step) — routine file task in one call | verified — P2-M3 gate ([S1](docs/flows/S1.md)) |
+| Policy-file changes apply only after you approve them; activity detection ignores the agent's own input and mouse jitter | verified — P2-M3 gate |
 | Code-signed binaries (Smart App Control on) | not yet (owner decision, ADR 0019) |
 | Fast observe on windows with hundreds of list items | not yet (Phase 2; 222 ms measured vs 120 ms budget) |
 | OCR | verified — P2-M2 (see above) |

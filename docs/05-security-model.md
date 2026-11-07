@@ -28,7 +28,12 @@ Default profile:
 | purchase, credential_entry | **deny** (human does it) |
 
 App rules (default deny list): password managers, banking apps, Windows Security, Credential
-Manager. Users can edit rules in the tray; every change is logged.
+Manager. Users edit `policy.json`; **a changed file applies only after the user confirms it in a
+core dialog** (the agent cannot loosen its own rules, ADR 0026); every change is logged.
+
+Protected paths (file skills, ADR 0026): Windows folder, Program Files, ProgramData, other
+users' profiles, UNC paths, drive roots, XtraOS install + data folders → `BLOCKED_BY_POLICY`.
+Deletes go to the Recycle Bin and always ask first.
 
 ## Hard boundaries (not configurable)
 

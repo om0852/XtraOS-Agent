@@ -159,6 +159,20 @@ Each milestone adds its cases here before implementation (CLAUDE.md §3).
 | P2-OCR-05 | `query` with no match / bad args | empty match list (not an error) / `INVALID_ARGS` |
 | P2-OCR-06 | Latency `ocr` window p50 | ≤ 400 ms (bench) |
 
+### P2-M3 App map + skills (ADR 0026)
+| ID | Test case | Expected |
+|---|---|---|
+| P2-AM-01 | `app_map scan` finds Calculator (Store app) and a classic app with launch ids | ids launch the app |
+| P2-AM-02 | `set` / `get` / `list` / `remove`; file is DPAPI-encrypted; survives a core restart | entry back; service name not in the file bytes |
+| P2-AM-03 | `launch_app("<mapped service>")` | the mapped app opens |
+| P2-SK-01 | `list_skills` | compact signatures incl. files.* |
+| P2-SK-02 | files.mkdir / copy / move / rename / list in a temp folder | file system matches; existing target → `INVALID_ARGS`, nothing overwritten |
+| P2-SK-03 | files.delete → dialog lists the items; Deny → nothing deleted; Allow → items in the Recycle Bin | as stated |
+| P2-SK-04 | Protected paths (Windows, XtraOS data, UNC, drive root) | `BLOCKED_BY_POLICY` |
+| P2-SK-05 | JSON macro skill with `${arg}` → runs as a batch; a Send step still needs the user's OK | as stated |
+| P2-SK-06 | Routine file task (copy a report into a new folder and open it) | 1 call |
+| P2-POL-01 | `policy.json` changed → core dialog; Deny → old rules stay; Allow → new rules | as stated, logged |
+
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).
 2. Fix → add/extend a test that would have caught it → re-run the full gate.

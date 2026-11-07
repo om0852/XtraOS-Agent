@@ -161,9 +161,9 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
                 let res = tokio::task::spawn_blocking(move || {
                     // Policy gate first (may show a confirm dialog), then the action.
                     let approval = crate::safety::authorize(&m, &params)?;
-                    let r = if m == "batch" {
-                        // Each step is authorised and logged on its own (ADR 0022).
-                        crate::exec::batch(&params, &mut |s| {
+                    let r = if m == "batch" || m == "run_skill" {
+                        // Each step is authorised and logged on its own (ADR 0022, 0026).
+                        let mut logger = |s: crate::exec::StepLog| {
                             let name = format!("batch:{}", s.tool);
                             log.record(&Entry {
                                 ts_ms: protocol::now_ms(),
@@ -175,7 +175,12 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
                                 ms: s.ms,
                                 policy: s.policy,
                             });
-                        })
+                        };
+                        if m == "batch" {
+                            crate::exec::batch(&params, &mut logger)
+                        } else {
+                            crate::skills::run(&params, &mut logger)
+                        }
                     } else {
                         crate::exec::dispatch(&m, &params)
                     };
@@ -223,7 +228,13 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
             other => (other, info),
         };
 
-        if let Some(n) = &policy_note {
+        if info.method != "status" && info.method != "pair" {
+            crate::safety::activity_end();
+        }
+        for n in crate::safety::take_policy_notes()
+            .iter()
+            .chain(policy_note.iter())
+        {
             // A changed policy file is recorded before the action it applies to (docs/05).
             shared.log.record(&Entry {
                 ts_ms: protocol::now_ms(),

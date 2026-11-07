@@ -47,6 +47,13 @@ use crate::{perceive, winmgr};
 // State
 
 static STOPPED: AtomicBool = AtomicBool::new(false);
+/// Real user activity seen by the low-level hooks (tick; 0 = none yet). Ignores the core's own
+/// injected input and mouse jitter under JITTER_PX (a resting hand / noisy sensor blocked the
+/// agent forever in the P2-M3 gate run).
+static USER_TICK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static HOOKS: AtomicBool = AtomicBool::new(false);
+static ANCHOR: Mutex<(i32, i32)> = Mutex::new((i32::MIN, i32::MIN));
+pub const JITTER_PX: i32 = 6;
 static UI: OnceLock<Ui> = OnceLock::new();
 static OVERLAY_TEXT: Mutex<String> = Mutex::new(String::new());
 static PROMPTS: Mutex<Option<HashMap<u64, Prompt>>> = Mutex::new(None);
@@ -54,11 +61,19 @@ static PROMPT_CV: Condvar = Condvar::new();
 static NEXT_PROMPT: AtomicU64 = AtomicU64::new(1);
 static POLICY: Mutex<Option<policy::Store>> = Mutex::new(None);
 static RATE: Mutex<Option<(Instant, policy::RateLimiter)>> = Mutex::new(None);
+/// Policy reload decisions waiting to be written to the action log (ipc drains them after
+/// every request — also when the request itself was then blocked).
+static POLICY_NOTES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub fn take_policy_notes() -> Vec<String> {
+    std::mem::take(&mut *POLICY_NOTES.lock().unwrap_or_else(|e| e.into_inner()))
+}
 
 const WM_APP_ACTIVITY: u32 = WM_APP + 1;
 const WM_APP_PROMPT: u32 = WM_APP + 2;
 const WM_APP_CLOSE_PROMPT: u32 = WM_APP + 3;
 const WM_APP_STATE: u32 = WM_APP + 4;
+const WM_APP_ACTIVITY_END: u32 = WM_APP + 5;
 const WM_TRAY: u32 = WM_APP + 10;
 pub const ID_STOP: usize = 1001;
 pub const ID_RESUME: usize = 1002;
@@ -122,6 +137,63 @@ pub fn check() -> Result<(), ActError> {
     } else {
         Ok(())
     }
+}
+
+/// Milliseconds since the user's last real input (keys, buttons, wheel, or moving the mouse
+/// more than JITTER_PX), from the hooks. None when the hooks are not running.
+pub fn user_idle_ms() -> Option<u32> {
+    if !HOOKS.load(Ordering::Relaxed) {
+        return None;
+    }
+    let t = USER_TICK.load(Ordering::Relaxed);
+    let now = unsafe { windows::Win32::System::SystemInformation::GetTickCount() };
+    Some(if t == 0 {
+        u32::MAX
+    } else {
+        now.wrapping_sub(t)
+    })
+}
+
+fn mark_user() {
+    let now = unsafe { windows::Win32::System::SystemInformation::GetTickCount() };
+    USER_TICK.store(now.max(1), Ordering::Relaxed);
+}
+
+unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
+        let injected = k.flags.0 & LLKHF_INJECTED.0 != 0;
+        if !injected || !input::recently_injected() {
+            mark_user();
+        }
+    }
+    CallNextHookEx(None, code, wp, lp)
+}
+
+unsafe extern "system" fn mouse_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let m = &*(lp.0 as *const MSLLHOOKSTRUCT);
+        let injected = m.flags & LLMHF_INJECTED != 0;
+        if !injected || !input::recently_injected() {
+            let mut a = ANCHOR.lock().unwrap_or_else(|e| e.into_inner());
+            if wp.0 as u32 == WM_MOUSEMOVE {
+                if a.0 == i32::MIN
+                    || (m.pt.x - a.0).abs() > JITTER_PX
+                    || (m.pt.y - a.1).abs() > JITTER_PX
+                {
+                    if a.0 != i32::MIN {
+                        mark_user();
+                    }
+                    *a = (m.pt.x, m.pt.y);
+                }
+            } else {
+                // buttons, wheel: always the user
+                *a = (m.pt.x, m.pt.y);
+                mark_user();
+            }
+        }
+    }
+    CallNextHookEx(None, code, wp, lp)
 }
 
 pub fn hotkey_name() -> Option<&'static str> {
@@ -219,14 +291,52 @@ fn with_policy<T>(f: impl FnOnce(&policy::Store) -> T) -> (T, Option<String>) {
     let mut g = POLICY.lock().unwrap_or_else(|e| e.into_inner());
     let store =
         g.get_or_insert_with(|| policy::Store::new(crate::pairing::data_dir().join("policy.json")));
-    let reloaded = store.refresh();
-    if let Some(r) = &reloaded {
-        for w in &store.policy.warnings {
-            eprintln!("[xtraos-core] policy: {w}");
+    // A changed policy file applies only after the user approves it (ADR 0026): otherwise the
+    // agent could loosen its own rules by editing the file.
+    let mut note = None;
+    if let Some(cand) = store.changed() {
+        let diff = policy::summary(&store.policy, &cand);
+        let hash = cand
+            .source
+            .as_ref()
+            .map(|s| s.1.clone())
+            .unwrap_or_else(|| "defaults".into());
+        let shown = if diff.is_empty() {
+            "(no rule changes)".to_string()
+        } else {
+            diff.join("\n")
+        };
+        let ok = if diff.is_empty() {
+            Ok(Some(0)) // nothing loosened or tightened: no need to ask
+        } else {
+            prompt(
+            "XtraOS Agent — your safety rules were changed",
+            &format!(
+                "The XtraOS policy file was changed (by you or by a program):\n\n{shown}\n\nApply these rules?"
+            ),
+            vec!["Apply new rules".into(), "Keep current rules".into()],
+            1,
+            Duration::from_secs(120),
+            )
+        };
+        if matches!(ok, Ok(Some(0))) {
+            for w in &cand.warnings {
+                eprintln!("[xtraos-core] policy: {w}");
+            }
+            store.apply(cand);
+            note = Some(format!("policy {hash} applied (user approved)"));
+        } else {
+            note = Some(format!("policy {hash} rejected: current rules kept"));
         }
-        eprintln!("[xtraos-core] {r}");
+        eprintln!("[xtraos-core] {}", note.as_deref().unwrap_or(""));
+        if let Some(n) = &note {
+            POLICY_NOTES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(n.clone());
+        }
     }
-    (f(store), reloaded)
+    (f(store), note)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -427,8 +537,27 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
             ))
         }
     }
-    let ((decision, reason, what, rate), note) = with_policy(|s| {
-        let (f, what) = gather(method, p);
+    // Skills: a macro runs as a batch (each step authorised); a built-in skill is checked
+    // with its own class and description (protected paths refused in plan()).
+    let skill = if method == "run_skill" {
+        let pl = crate::skills::plan(p)?;
+        if pl.is_macro {
+            return Ok(Approval {
+                decision: "allow",
+                policy_note: None,
+            });
+        }
+        Some(pl)
+    } else {
+        None
+    };
+    let ((decision, reason, what, rate), _note) = with_policy(|s| {
+        let (mut f, mut what) = gather(method, p);
+        if let Some(pl) = &skill {
+            f.method = format!("run_skill:{}", pl.name);
+            f.skill_class = Some(pl.class);
+            what = pl.what.clone();
+        }
         let (d, why) = s.policy.decide(&f);
         (d, why, what, s.policy.rate_per_minute)
     });
@@ -465,7 +594,7 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
     activity(&what);
     Ok(Approval {
         decision,
-        policy_note: note,
+        policy_note: None, // reload notes are logged through take_policy_notes()
     })
 }
 
@@ -719,6 +848,11 @@ fn wait_for_human(p: &Value) -> Result<Value, ActError> {
 // ---------------------------------------------------------------------------------------------
 // Overlay
 
+/// The action finished: the banner stays 2.5 s more, then hides (ipc calls this).
+pub fn activity_end() {
+    post(WM_APP_ACTIVITY_END, 0);
+}
+
 /// Shows "XtraOS Agent · <what>" on the overlay banner (never typed text).
 pub fn activity(what: &str) {
     *OVERLAY_TEXT.lock().unwrap_or_else(|e| e.into_inner()) = perceive::clip(what, 90);
@@ -902,6 +1036,12 @@ fn ui_thread(tx: std::sync::mpsc::Sender<Ui>) {
                 "[xtraos-core] Ctrl+Alt+Esc is taken by another program: use the tray icon to stop"
             );
         }
+        // Low-level input hooks: tell the user's real activity from the core's own input and
+        // from tiny mouse jitter (ADR 0027). Without them the core falls back to
+        // GetLastInputInfo.
+        let kb = SetWindowsHookExW(WH_KEYBOARD_LL, Some(kb_hook), Some(hinst), 0);
+        let ms = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), Some(hinst), 0);
+        HOOKS.store(kb.is_ok() && ms.is_ok(), Ordering::Relaxed);
         let nid = tray_data(msg, tray_tip());
         let tray = Shell_NotifyIconW(NIM_ADD, &nid).as_bool();
         if !tray && !hotkey {
@@ -959,6 +1099,12 @@ unsafe extern "system" fn ui_proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
             if msg == WM_APP_STATE {
                 let nid = tray_data(h, tray_tip());
                 let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+            }
+            LRESULT(0)
+        }
+        WM_APP_ACTIVITY_END => {
+            if !stopped() {
+                SetTimer(Some(h), OVERLAY_TIMER, 2500, None);
             }
             LRESULT(0)
         }
@@ -1067,9 +1213,9 @@ unsafe fn refresh_overlay(activity: bool) {
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
-        if !stopped() {
-            SetTimer(Some(WHWND(u as _)), OVERLAY_TIMER, 2500, None);
-        }
+        // While an action runs (it may wait for the user to be idle) the banner stays up;
+        // the hide timer starts when the action ends (activity_end).
+        let _ = KillTimer(Some(WHWND(u as _)), OVERLAY_TIMER);
     } else {
         let _ = ShowWindow(o, SW_HIDE);
     }

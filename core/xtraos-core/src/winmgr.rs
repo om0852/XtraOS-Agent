@@ -584,6 +584,20 @@ fn launch_app(p: &Value) -> Result<Value, ActError> {
             .join(" "),
         _ => return Err(bad("'args' must be a string or an array of strings")),
     };
+    // A service from the app map (ADR 0026) launches what the map says; explicit args win.
+    let (app, args) = match crate::appmap::resolve_launch(app) {
+        Some((a, map_args)) if args.is_empty() => (
+            a,
+            map_args
+                .iter()
+                .map(|x| quote_arg(x))
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        Some((a, _)) => (a, args),
+        None => (app.to_string(), args),
+    };
+    let app = app.as_str();
     let elevated = p.get("elevated").and_then(Value::as_bool).unwrap_or(false);
     let timeout = opt_u64(p, "timeout_ms", 15_000, 60_000)?;
 

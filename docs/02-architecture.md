@@ -43,7 +43,7 @@ stateless translator. The tray app is the human's control surface.
 | `killswitch` | Global hotkey (default Ctrl+Alt+Esc) + tray button; cancels queue, releases held keys/buttons. |
 | `log` | Append-only action log (JSONL) with masking; per-session files. |
 | `appmap` | Local encrypted (DPAPI) profile: installed apps, where services are logged in (desktop vs browser profile), paths. Phase 2. |
-| `skills` | Deterministic multi-step routines (`app.action(args)`), versioned, declared in YAML + Rust executors. Phase 2. |
+| `skills` | Deterministic multi-step routines (`app.action(args)`): built-in Rust executors + JSON macro skills run through `batch` (ADR 0026; JSON instead of YAML). |
 | `metrics` | Latency/size counters for budgets. |
 
 ### 2.2 xtraos-mcp (TypeScript)

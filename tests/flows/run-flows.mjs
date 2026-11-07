@@ -212,6 +212,32 @@ async function F8(f) {
   await f.call('close_window', { window: w }, 'clean up');
 }
 
+// S1 (P2-M3, ADR 0026): a routine file task in ONE call through a macro skill.
+async function S1(f) {
+  const data = path.join(tmp, 'data');
+  fs.mkdirSync(path.join(data, 'skills'), { recursive: true });
+  fs.writeFileSync(path.join(data, 'skills', 'reports.json'), JSON.stringify({
+    name: 'reports.file', description: 'put files into a new folder and show it',
+    args: { files: {}, folder: {} },
+    steps: [
+      { tool: 'run_skill', args: { name: 'files.mkdir', args: { path: '${folder}' } } },
+      { tool: 'run_skill', args: { name: 'files.copy', args: { from: '${files}', to_dir: '${folder}' } } },
+      { tool: 'run_skill', args: { name: 'files.open', args: { path: '${folder}' } } },
+    ],
+  }));
+  const src = path.join(tmp, 'q3-report.pdf');
+  fs.writeFileSync(src, 'report');
+  const folder = path.join(tmp, 'Q3 Reports');
+  const l = await f.call('list_skills', { app: 'reports' }, 'which skill?');
+  f.expect(l.text.includes('reports.file('), 'macro skill listed');
+  const r = await f.call('run_skill', { name: 'reports.file', args: { files: [src], folder } }, 'ONE call: new folder + copy + open');
+  f.expect(r.text.startsWith('ok skill 3/3'), 'all 3 steps ok');
+  f.expect(fs.existsSync(path.join(folder, 'q3-report.pdf')), 'file copied');
+  const w = await f.call('wait_for', { window_title: 'Q3 Reports', timeout_ms: 8000 }, 'Explorer shows the folder');
+  const ref = w.text.match(/\bw\d+\b/)?.[0];
+  if (f.expect(ref, 'Explorer window found')) await f.call('close_window', { window: ref }, 'clean up');
+}
+
 // P2-BENCH-01 (ADR 0022): a routine task in ≤ 3 calls / ≤ 2,000 tokens with wait_for + batch.
 async function R1(f) {
   const l = await f.call('launch_app', { app: 'calc' }, 'call 1: open Calculator');
@@ -272,6 +298,7 @@ const FLOWS = {
   F6: ['Terminal: run a command and read its output', F6],
   F10: ['Kill switch during a long drag, then the user resumes', F10],
   F8: ['Opaque (hand-drawn) window: observe finds nothing, OCR finds and clicks the text', F8],
+  S1: ['Routine file task in ONE call: macro skill (new folder + copy + open)', S1],
   R1: ['Routine task in ≤ 3 calls: Calculator 7 + 5 with wait_for + batch (P2-BENCH-01)', R1],
 };
 

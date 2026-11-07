@@ -261,8 +261,16 @@ fn send(inputs: &[INPUT]) -> Result<(), ActError> {
     send_always(inputs)
 }
 
+/// True while/just after the core injects input (the hooks then attribute injected events to
+/// the core, not to the user or another program).
+pub fn recently_injected() -> bool {
+    let t = LAST_INJECT.load(Ordering::Relaxed);
+    t != 0 && unsafe { GetTickCount() }.wrapping_sub(t) <= 100
+}
+
 /// Only for releasing held buttons/keys: must work even after the kill switch.
 fn send_always(inputs: &[INPUT]) -> Result<(), ActError> {
+    LAST_INJECT.store(unsafe { GetTickCount() }.max(1), Ordering::Relaxed);
     let n = unsafe {
         SendInput(
             inputs.len() as u32,
@@ -438,7 +446,14 @@ pub fn wait_user_idle(o: &Polite) -> Result<(), ActError> {
     loop {
         crate::safety::check()?;
         let now = unsafe { GetTickCount() };
-        match user_idle(now, last_input_tick(), LAST_INJECT.load(Ordering::Relaxed)) {
+        // Precise source when the safety hooks run (own input + jitter ignored); else the
+        // system-wide last-input time.
+        let idle = match crate::safety::user_idle_ms() {
+            Some(ms) if ms == u32::MAX => None,
+            Some(ms) => Some(ms),
+            None => user_idle(now, last_input_tick(), LAST_INJECT.load(Ordering::Relaxed)),
+        };
+        match idle {
             None => return Ok(()),
             Some(ms) if ms >= o.idle_ms => return Ok(()),
             Some(ms) => {
@@ -498,6 +513,13 @@ impl MouseGuard {
         (c.x - self.last.x).abs() > 2 || (c.y - self.last.y).abs() > 2
     }
 
+    /// Moved further than sensor jitter: that is the user.
+    fn user_moved_far(&self) -> bool {
+        let c = cursor();
+        let j = crate::safety::JITTER_PX;
+        (c.x - self.last.x).abs() > j || (c.y - self.last.y).abs() > j
+    }
+
     fn check_target(&self, p: POINT, window: Option<HWND>) -> Result<(), ActError> {
         let under = root_at(p);
         if crate::safety::is_own_window(under) {
@@ -518,7 +540,7 @@ impl MouseGuard {
     }
 
     fn move_to(&mut self, p: POINT) -> Result<(), ActError> {
-        if self.user_moved() {
+        if self.user_moved_far() {
             return Err(user_active("the mouse was moved by the user"));
         }
         move_abs(p)?;
@@ -539,8 +561,21 @@ impl MouseGuard {
 
     /// Before a button event: user still idle and point still inside the target window.
     fn before_button(&self, p: POINT, window: Option<HWND>) -> Result<(), ActError> {
-        if self.user_moved() {
+        if self.user_moved_far() {
             return Err(user_active("the mouse was moved by the user"));
+        }
+        if self.user_moved() {
+            // A few pixels of drift (noisy sensor, resting hand): aim again, then press.
+            move_abs(self.last)?;
+            for _ in 0..12 {
+                if !self.user_moved() {
+                    break;
+                }
+                sleep(Duration::from_millis(5));
+            }
+            if self.user_moved() {
+                return Err(user_active("the mouse keeps being moved by the user"));
+            }
         }
         self.check_target(p, window)
     }

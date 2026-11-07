@@ -39,10 +39,12 @@ pub enum Class {
     SystemSettings,
     Elevated,
     CredentialEntry,
+    /// Creating, copying, moving, renaming files through file skills (P2-M3).
+    FileChange,
 }
 
 impl Class {
-    pub const ALL: [Class; 11] = [
+    pub const ALL: [Class; 12] = [
         Class::Observe,
         Class::Input,
         Class::Launch,
@@ -54,6 +56,7 @@ impl Class {
         Class::SystemSettings,
         Class::Elevated,
         Class::CredentialEntry,
+        Class::FileChange,
     ];
 
     pub fn name(self) -> &'static str {
@@ -69,6 +72,7 @@ impl Class {
             Class::SystemSettings => "system_settings",
             Class::Elevated => "elevated",
             Class::CredentialEntry => "credential_entry",
+            Class::FileChange => "file_change",
         }
     }
 
@@ -78,7 +82,9 @@ impl Class {
 
     fn default_decision(self) -> Decision {
         match self {
-            Class::Observe | Class::Input | Class::Launch | Class::Close => Decision::Allow,
+            Class::Observe | Class::Input | Class::Launch | Class::Close | Class::FileChange => {
+                Decision::Allow
+            }
             Class::MessageSend
             | Class::FileSend
             | Class::Delete
@@ -110,6 +116,8 @@ pub struct Facts {
     pub drag_from_explorer: bool,
     /// The action touches one of XtraOS's own windows.
     pub own_window: bool,
+    /// Class declared by a skill (P2-M3), e.g. `delete` for files.delete.
+    pub skill_class: Option<Class>,
 }
 
 const MESSAGING_PROCESSES: &[&str] = &[
@@ -250,7 +258,10 @@ fn is_messaging(p: &str, title: &str) -> bool {
 
 fn method_class(m: &str) -> Class {
     match m {
-        "observe" | "find" | "read_text" | "screenshot" | "list_windows" => Class::Observe,
+        "observe" | "find" | "read_text" | "screenshot" | "list_windows" | "ocr" | "wait_for" => {
+            Class::Observe
+        }
+        m if m.starts_with("run_skill:") || m == "app_map" => Class::Observe,
         "launch_app" => Class::Launch,
         "close_window" => Class::Close,
         _ => Class::Input,
@@ -309,6 +320,9 @@ pub fn classify(f: &Facts) -> Vec<(Class, String)> {
     }
     if f.elevated {
         out.push((Class::Elevated, "administrator (UAC) launch".into()));
+    }
+    if let Some(c) = f.skill_class {
+        out.push((c, f.method.clone()));
     }
     if f.password && matches!(m, "type" | "set_value" | "press_keys") {
         out.push((Class::CredentialEntry, "password field".into()));
@@ -493,8 +507,9 @@ impl Store {
         &self.path
     }
 
-    /// Reloads if the file changed. Returns Some(description) when it did (for the log).
-    pub fn refresh(&mut self) -> Option<String> {
+    /// A changed file, loaded but NOT applied (the user must approve it first, ADR 0026).
+    /// Remembers the change so it is asked about once.
+    pub fn changed(&mut self) -> Option<Policy> {
         let now = std::fs::metadata(&self.path)
             .and_then(|m| m.modified())
             .ok();
@@ -502,12 +517,49 @@ impl Store {
             return None;
         }
         self.mtime = now;
-        self.policy = Policy::load(&self.path);
-        Some(match &self.policy.source {
-            Some((_, h)) => format!("policy loaded {h}"),
-            None => "policy file removed: defaults".into(),
-        })
+        let cand = Policy::load(&self.path);
+        if cand.source.as_ref().map(|s| &s.1) == self.policy.source.as_ref().map(|s| &s.1) {
+            return None; // touched but same content
+        }
+        Some(cand)
     }
+
+    pub fn apply(&mut self, p: Policy) {
+        self.policy = p;
+    }
+}
+
+/// Human-readable differences between two policies (for the approval dialog and the log).
+pub fn summary(old: &Policy, new: &Policy) -> Vec<String> {
+    let name = |d: Option<&Decision>| match d {
+        Some(Decision::Allow) => "allow",
+        Some(Decision::Confirm) => "confirm",
+        Some(Decision::Deny) => "deny",
+        None => "(default)",
+    };
+    let mut out = Vec::new();
+    for c in Class::ALL {
+        let (a, b) = (old.classes.get(&c), new.classes.get(&c));
+        if a != b {
+            out.push(format!("{}: {} → {}", c.name(), name(a), name(b)));
+        }
+    }
+    let mut apps: Vec<&String> = old.apps.keys().chain(new.apps.keys()).collect();
+    apps.sort();
+    apps.dedup();
+    for a in apps {
+        let (x, y) = (old.apps.get(a), new.apps.get(a));
+        if x != y {
+            out.push(format!("app {a}: {} → {}", name(x), name(y)));
+        }
+    }
+    if old.rate_per_minute != new.rate_per_minute {
+        out.push(format!(
+            "rate_per_minute: {} → {}",
+            old.rate_per_minute, new.rate_per_minute
+        ));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -639,6 +691,28 @@ mod tests {
         let bad = Policy::from_json("{not json");
         assert_eq!(bad.classes[&Class::MessageSend], Decision::Confirm);
         assert!(!bad.warnings.is_empty());
+    }
+
+    #[test]
+    fn summary_lists_loosened_rules() {
+        let old = Policy::default();
+        let new = Policy::from_json(
+            r#"{"classes": {"message_send": "allow"}, "apps": {"keepass.exe": "allow"}}"#,
+        );
+        let s = summary(&old, &new);
+        assert!(
+            s.contains(&"message_send: confirm → allow".to_string()),
+            "{s:?}"
+        );
+        assert!(
+            s.contains(&"app keepass.exe: deny → allow".to_string()),
+            "{s:?}"
+        );
+        assert!(summary(&old, &Policy::default()).is_empty());
+        assert_eq!(
+            Policy::default().classes[&Class::FileChange],
+            Decision::Allow
+        );
     }
 
     #[test]

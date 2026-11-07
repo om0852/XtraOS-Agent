@@ -5,6 +5,7 @@
 //! M5: safety: kill switch, policy engine, human-in-the-loop dialogs, overlay.
 //! Only this crate talks to the OS (CLAUDE.md §3).
 pub mod actionlog;
+pub mod appmap;
 pub mod capture;
 pub mod exec;
 pub mod input;
@@ -15,5 +16,6 @@ pub mod perceive;
 pub mod policy;
 pub mod protocol;
 pub mod safety;
+pub mod skills;
 pub mod winmgr;
 pub mod winsec;

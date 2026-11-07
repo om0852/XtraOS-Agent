@@ -63,7 +63,7 @@ all real-input tools accept `idle_ms`. `drag` ends can be refs: `from_ref`, `to_
 | `mouse` | `action` (move/down/up/path), `x, y` or `points[[x,y],...]`, `button?`, `window?` | ok | P1 (M2) |
 | `set_value` | `ref`, `value` (UIA ValuePattern, no typing; password field → `NEEDS_HUMAN`) | ok `mode=background` | P1 (M4) |
 | `clipboard` | `op` (get/set), `text?` | text | P1 (M2) |
-| `batch` | `steps[]` (≤ 50) of `{tool, args}`: input, window and read tools; each step passes the policy; `stop_on_error?` (default true) | one line per step | P2 (M1) |
+| `batch` | `steps[]` (≤ 50) of `{tool, args}`: input, window and read tools, ocr, app_map, built-in `run_skill`; each step passes the policy; `stop_on_error?` (default true) | one line per step | P2 (M1; M3) |
 
 ## Flow control & human in the loop
 
@@ -82,9 +82,9 @@ Stop) every call returns `STOPPED` until the user resumes from the tray; there i
 
 | Tool | Args | Returns |
 |---|---|---|
-| `list_skills` | `app?` | skill signatures |
-| `run_skill` | `name`, `args` | result (one call, many steps) |
-| `app_map` | `get(service)` / `set(service, surface, location)` | entry |
+| `list_skills` | `app?` (name prefix, e.g. `files`) | one line per skill: name(args) — description (P2-M3) |
+| `run_skill` | `name`, `args` | result (one call, many steps); built-in skills + JSON macro skills; policy per action/step (P2-M3) |
+| `app_map` | `op`: `scan(query?)` / `list` / `get(service)` / `set(service, surface, location)` / `remove(service)` | installed apps or entries; stored DPAPI-encrypted; `launch_app` accepts mapped services (P2-M3) |
 
 ## Output example (`observe`)
 

@@ -306,15 +306,41 @@ async fn saf04_saf10_policy_file_deny_app_and_reload() {
         )
         .await;
     assert_eq!(code(&r), "BLOCKED_BY_POLICY", "{r}");
-    // edit the file: the next action uses the new rules
+    // P2-POL-01 (ADR 0026): a changed file applies only after the user approves it.
+    // First the user keeps the current rules: still blocked.
     std::thread::sleep(Duration::from_millis(50));
     std::fs::write(&file, r#"{"apps": {"testbed.exe": "allow"}}"#).unwrap();
+    let human = human_answers(1); // "Keep current rules"
     let o = core.call("observe", json!({"window": tb.window()})).await;
+    let msg = human.join().unwrap();
+    assert!(
+        msg.contains("app testbed.exe: deny → allow"),
+        "dialog shows the change: {msg}"
+    );
+    assert_eq!(
+        code(&o),
+        "BLOCKED_BY_POLICY",
+        "rejected change must not apply: {o}"
+    );
+    // Then the user edits again and applies: allowed.
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(
+        &file,
+        r#"{"apps": {"testbed.exe": "allow"}, "rate_per_minute": 600}"#,
+    )
+    .unwrap();
+    let human = human_answers(0); // "Apply new rules"
+    let o = core.call("observe", json!({"window": tb.window()})).await;
+    human.join().unwrap();
     assert!(o.get("result").is_some(), "{o}");
     let log = std::fs::read_to_string(core.log.path()).unwrap();
     assert!(
         log.contains("\"method\":\"policy_load\""),
         "reload must be logged: {log}"
+    );
+    assert!(
+        log.contains("rejected: current rules kept") && log.contains("applied (user approved)"),
+        "both decisions logged: {log}"
     );
     // back to defaults for the other tests
     safety::set_policy_path(dir.join("none.json"));

@@ -71,7 +71,7 @@ fn last_input() -> u32 {
 /// Simulates a working user: 1-px relative mouse moves (net zero) until stopped.
 fn simulate_user(stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let mut d = 1;
+        let mut d = 20; // a real hand moves more than sensor jitter (> 6 px)
         while !stop.load(Ordering::Relaxed) {
             let m = MouseIn {
                 kind: 0,

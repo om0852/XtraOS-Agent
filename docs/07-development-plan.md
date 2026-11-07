@@ -64,7 +64,9 @@ P2-M2 OCR · P2-M3 app map + skills engine (Explorer file ops) · P2-M4 messagin
 an owner-chosen test chat) · P2-M5 elevated helper (F5) · P2-M6 browser bridge + packaging.
 **P2-M1 Fewer calls: closed** (ADRs 0022, 0023) — gate 13/13; routine task 3 calls / ~335 tokens.
 **P2-M2 OCR: closed** (ADRs 0024, 0025) — gate 14/14; opaque window read in ~54 tokens, 33 ms.
-**Current: P2-M3 app map + skills engine.**
+**P2-M3 app map + skills: closed** (ADRs 0026, 0027) — routine file task in one call; policy edits need
+the user's OK; input hooks ignore jitter and the core's own input.
+**Current: P2-M4 messaging skills (needs an owner-chosen test chat).**
 
 ## Phase 3 — Reach
 

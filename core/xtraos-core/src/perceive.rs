@@ -113,7 +113,7 @@ unsafe impl Sync for El {}
 static MTA: Once = Once::new();
 static UIA: Mutex<Option<Arc<Uia>>> = Mutex::new(None);
 
-fn com_init() {
+pub(crate) fn com_init() {
     MTA.call_once(|| unsafe {
         let _ = CoIncrementMTAUsage(); // cookie intentionally leaked: keep the MTA for life
     });
@@ -813,6 +813,7 @@ pub const METHODS: &[&str] = &[
     "set_value",
     "screenshot",
     "wait_for",
+    "ocr",
 ];
 
 pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
@@ -828,6 +829,7 @@ pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
         }
         "screenshot" => crate::capture::screenshot(p),
         "wait_for" => wait_for(p),
+        "ocr" => crate::ocr::ocr(p),
         m => Err(bad(format!("'{m}' is not a perception method"))),
     }
 }

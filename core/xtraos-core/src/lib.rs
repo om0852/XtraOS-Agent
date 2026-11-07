@@ -9,6 +9,7 @@ pub mod capture;
 pub mod exec;
 pub mod input;
 pub mod ipc;
+pub mod ocr;
 pub mod pairing;
 pub mod perceive;
 pub mod policy;

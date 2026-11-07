@@ -40,8 +40,8 @@ static class Program
         // winexe with no console the missing stdin handle counts as "redirected", ReadLine
         // returns null at once and the window would close immediately (found by win01).
         bool controlled = Array.IndexOf(args, "--control") >= 0;
-        var reader = new Thread(() => ReadLoop(form as Testbed)) { IsBackground = true };
-        form.Shown += delegate { if (controlled && form is Testbed) { reader.Start(); Out("{\"ready\":true}"); } };
+        var reader = new Thread(() => ReadLoop((ICommandable)form)) { IsBackground = true };
+        form.Shown += delegate { if (controlled) { reader.Start(); Out("{\"ready\":true}"); } };
         Application.Run(form);
     }
 
@@ -50,8 +50,9 @@ static class Program
         lock (OutLock) { Console.Out.WriteLine(s); Console.Out.Flush(); }
     }
 
-    static void ReadLoop(Testbed form)
+    static void ReadLoop(ICommandable target)
     {
+        var form = (Form)target;
         string line;
         while ((line = Console.In.ReadLine()) != null)
         {
@@ -60,7 +61,7 @@ static class Program
             var sbCmd = new StringBuilder();
             foreach (char ch in line) if (ch >= 'a' && ch <= 'z') sbCmd.Append(ch);
             string cmd = sbCmd.ToString();
-            string reply = (string)form.Invoke(new Func<string>(() => form.Command(cmd)));
+            string reply = (string)form.Invoke(new Func<string>(() => target.Command(cmd)));
             Out(reply);
             if (cmd == "quit") break;
         }
@@ -68,7 +69,9 @@ static class Program
     }
 }
 
-class Testbed : Form
+interface ICommandable { string Command(string cmd); }
+
+class Testbed : Form, ICommandable
 {
     readonly Dictionary<string, Control> named = new Dictionary<string, Control>();
     readonly Dictionary<string, int> clicks = new Dictionary<string, int>();
@@ -250,22 +253,66 @@ class Testbed : Form
 }
 
 // A window whose content is drawn by hand: UI Automation sees no controls inside (like canvas
-// apps, games and some Electron apps).
-class OpaqueForm : Form
+// apps, games and some Electron apps). Its "buttons" are painted text; clicks are hit-tested
+// by hand, so only OCR-based targeting can find them (P2-M2). Control channel: rects / state /
+// quit, like the main testbed.
+class OpaqueForm : Form, ICommandable
 {
+    static readonly string[] Names = { "Start Game", "Options", "Quit" };
+    readonly Rectangle[] buttons = { new Rectangle(40, 40, 260, 64), new Rectangle(40, 130, 260, 64), new Rectangle(40, 220, 260, 64) };
+    readonly Rectangle score = new Rectangle(360, 50, 240, 50);
+    readonly int[] clicks = new int[3];
+    string last = "none";
+    readonly Font big = new Font("Segoe UI", 20f, FontStyle.Bold, GraphicsUnit.Pixel);
+
     public OpaqueForm(Point location)
     {
         AutoScaleMode = AutoScaleMode.None;
         StartPosition = FormStartPosition.Manual;
         Location = location;
-        Size = new Size(640, 420);
+        Size = new Size(680, 400);
         Text = "XtraOS Opaque";
         BackColor = Color.White;
+        DoubleBuffered = true;
         Paint += (s, e) =>
         {
-            e.Graphics.FillRectangle(Brushes.MediumSeaGreen, 40, 40, 200, 80);
-            e.Graphics.FillEllipse(Brushes.Coral, 300, 60, 120, 120);
-            e.Graphics.DrawString("canvas only", Font, Brushes.Black, 40, 140);
+            var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                e.Graphics.FillRectangle(Brushes.MediumSeaGreen, buttons[i]);
+                e.Graphics.DrawString(Names[i], big, Brushes.White, buttons[i], center);
+            }
+            e.Graphics.DrawString("Score 1234", big, Brushes.Black, score, center);
+            e.Graphics.DrawString("Last click: " + last, big, Brushes.Black, new Rectangle(360, 230, 300, 50), center);
         };
+        MouseClick += (s, e) =>
+        {
+            for (int i = 0; i < buttons.Length; i++) if (buttons[i].Contains(e.Location)) { clicks[i]++; last = Names[i]; Invalidate(); }
+        };
+    }
+
+    public string Command(string cmd)
+    {
+        var sb = new StringBuilder();
+        switch (cmd)
+        {
+            case "rects":
+                sb.Append("{\"hwnd\":").Append(Handle.ToInt64()).Append(",\"controls\":{");
+                for (int i = 0; i < buttons.Length; i++) Rect(sb, Names[i], buttons[i]).Append(',');
+                Rect(sb, "Score 1234", score);
+                return sb.Append("}}").ToString();
+            case "state":
+                sb.Append("{\"clicks\":{");
+                for (int i = 0; i < Names.Length; i++) sb.Append(i > 0 ? "," : "").Append('"').Append(Names[i]).Append("\":").Append(clicks[i]);
+                return sb.Append("}}").ToString();
+            case "quit": return "{\"ok\":true}";
+            default: return "{\"error\":\"unknown command\"}";
+        }
+    }
+
+    StringBuilder Rect(StringBuilder sb, string name, Rectangle r)
+    {
+        Rectangle s = RectangleToScreen(r);
+        return sb.Append('"').Append(name).Append("\":[").Append(s.X).Append(',').Append(s.Y).Append(',').Append(s.Width).Append(',').Append(s.Height).Append(']');
     }
 }

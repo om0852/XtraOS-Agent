@@ -193,6 +193,25 @@ async function F6(f) {
   if (x.isError) await f.call('close_window', { window: tw }, 'close the terminal instead');
 }
 
+// F8 (P2-M2, ADR 0024): an opaque window — observe finds nothing, OCR finds the text to click.
+async function F8(f) {
+  const exe = path.join(root, 'testbed', 'bin', 'testbed.exe');
+  const l = await f.call('launch_app', { app: exe, args: ['200', '160', '--opaque'] }, 'a hand-drawn app (like a game)');
+  const w = winRef(l.text);
+  const o = await f.call('batch', { steps: [
+    { tool: 'wait_for', args: { window: w, idle_ms: 300 } },
+    { tool: 'observe', args: { window: w, full: true } },
+  ] }, 'read it the normal way');
+  f.expect(o.text.includes('opaque'), 'observe reports opaque');
+  const q = await f.call('ocr', { window: w, query: 'start game' }, 'find the text by OCR');
+  const m = q.text.match(/@(\d+),(\d+)/);
+  if (!f.expect(m, 'OCR found "Start Game"')) return;
+  await f.call('click', { x: Number(m[1]), y: Number(m[2]), window: w }, 'click the text');
+  const v = await f.call('ocr', { window: w, query: 'last click: start game' }, 'did the app react?');
+  f.expect(/1 matching lines/.test(v.text), 'the app shows "Last click: Start Game"');
+  await f.call('close_window', { window: w }, 'clean up');
+}
+
 // P2-BENCH-01 (ADR 0022): a routine task in ≤ 3 calls / ≤ 2,000 tokens with wait_for + batch.
 async function R1(f) {
   const l = await f.call('launch_app', { app: 'calc' }, 'call 1: open Calculator');
@@ -252,6 +271,7 @@ const FLOWS = {
   F4: ['Drag a file from Explorer onto a web page drop zone (refs)', F4],
   F6: ['Terminal: run a command and read its output', F6],
   F10: ['Kill switch during a long drag, then the user resumes', F10],
+  F8: ['Opaque (hand-drawn) window: observe finds nothing, OCR finds and clicks the text', F8],
   R1: ['Routine task in ≤ 3 calls: Calculator 7 + 5 with wait_for + batch (P2-BENCH-01)', R1],
 };
 

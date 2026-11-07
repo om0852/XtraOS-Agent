@@ -171,6 +171,34 @@ fn resume() {
     post(WM_APP_STATE, 0);
 }
 
+/// Name of the desktop that receives input ("Default" normally; "Winlogon" when locked or a
+/// UAC prompt is up). None when it cannot be opened, which also means locked/secure.
+/// https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-openinputdesktop
+pub fn input_desktop_name() -> Option<String> {
+    use windows::Win32::System::StationsAndDesktops::{
+        CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, DESKTOP_CONTROL_FLAGS,
+        DESKTOP_READOBJECTS, UOI_NAME,
+    };
+    unsafe {
+        let d = OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS).ok()?;
+        let mut buf = [0u16; 64];
+        let mut need = 0u32;
+        let ok = GetUserObjectInformationW(
+            windows::Win32::Foundation::HANDLE(d.0),
+            UOI_NAME,
+            Some(buf.as_mut_ptr().cast()),
+            (buf.len() * 2) as u32,
+            Some(&mut need),
+        )
+        .is_ok();
+        let _ = CloseDesktop(d);
+        ok.then(|| {
+            let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            String::from_utf16_lossy(&buf[..n])
+        })
+    }
+}
+
 pub fn is_own_window(h: HWND) -> bool {
     !h.is_null() && winmgr::pid_of(h) == std::process::id()
 }
@@ -383,6 +411,21 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
             decision: "allow",
             policy_note: None,
         });
+    }
+    // Locked screen / UAC prompt: nothing on the user's desktop can be seen or touched, and the
+    // OS reports that as confusing errors (covered windows, failed captures — P2-M2 gate run).
+    match input_desktop_name() {
+        Some(d) if d.eq_ignore_ascii_case("Default") => {}
+        other => {
+            return Err(err(
+                "NEEDS_HUMAN",
+                format!(
+                    "the screen is locked or a secure prompt is showing (input desktop: {}); nothing was done",
+                    other.as_deref().unwrap_or("not accessible")
+                ),
+                "Wait until the user unlocks the PC / answers the prompt, then retry.",
+            ))
+        }
     }
     let ((decision, reason, what, rate), note) = with_policy(|s| {
         let (f, what) = gather(method, p);

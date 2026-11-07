@@ -109,9 +109,16 @@ pub fn testbed_exe() -> PathBuf {
 
 impl Testbed {
     pub fn start(x: i32, y: i32) -> Self {
+        Self::start_with(x, y, &[])
+    }
+
+    /// Like `start`, with extra arguments (e.g. `--opaque`).
+    pub fn start_with(x: i32, y: i32, extra: &[&str]) -> Self {
         use std::io::BufRead;
+        let mut args = vec![x.to_string(), y.to_string(), "--control".to_string()];
+        args.extend(extra.iter().map(|a| a.to_string()));
         let mut child = std::process::Command::new(testbed_exe())
-            .args([x.to_string(), y.to_string(), "--control".into()])
+            .args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()

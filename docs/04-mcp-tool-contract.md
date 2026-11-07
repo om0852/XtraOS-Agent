@@ -17,7 +17,8 @@ an update here first. Status: `P1` = Phase 1, `P2` = Phase 2, `P3` = Phase 3.
 ELEMENT_NOT_FOUND, STALE_REF, TIMEOUT, INVALID_ARGS, NOT_IMPLEMENTED, INTERNAL,
 USER_ACTIVE` (user held a button/modifier or moved the mouse — action aborted, ADR 0010),
 `TARGET_OBSCURED` (the point is not inside the given window — nothing clicked, ADR 0010),
-`STALE_REF` (the element of a ref is gone or its window closed — observe again, ADR 0015)
+`STALE_REF` (the element of a ref is gone or its window closed — observe again, ADR 0015).
+`NEEDS_HUMAN` also when the screen is locked or a UAC/secure prompt is showing (ADR 0025).
 
 ## Perception
 
@@ -27,7 +28,7 @@ USER_ACTIVE` (user held a button/modifier or moved the mouse — action aborted,
 | `screenshot` | `window?` or `region?` `{x,y,w,h}`, `scale?` (default 0.5, 0.1–1) | PNG + mapping `screen = origin + px/scale` | P1 (M4) |
 | `read_text` | `window` or `ref`, `last_lines?` | text (UIA TextPattern / Value / Name); never password values | P1 (M4) |
 | `find` | `query` (name/role/automation-id substring), `window?` | matching refs (≤ 20) | P1 (M4) |
-| `ocr` | `window?`, `region?` | text boxes with coordinates | P2 |
+| `ocr` | `window?` or `region?` `{x,y,w,h}`, `query?`, `max_lines?` (80), `language?` | lines `"text" @x,y wxh` in screen pixels (click-ready); Windows built-in OCR, offline | P2 (M2) |
 
 ## Windows & apps
 

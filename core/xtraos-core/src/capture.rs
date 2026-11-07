@@ -243,7 +243,27 @@ pub fn screenshot(p: &Value) -> Result<Value, ActError> {
             .filter(|s| (0.1..=1.0).contains(s))
             .ok_or_else(|| bad("'scale' must be 0.1..=1"))?,
     };
-    let (img, origin, window) = if let Some(r) = p.get("region").filter(|v| !v.is_null()) {
+    let (img, origin, window) = grab(p)?;
+    let (w, h, rgb) = downscale_rgb(&img, scale);
+    let png = png_rgb(w, h, &rgb)?;
+    Ok(json!({
+        "png_base64": base64(&png),
+        "width": w,
+        "height": h,
+        "origin": [origin.0, origin.1],
+        "scale": scale,
+        "window": window,
+        "bytes": png.len(),
+    }))
+}
+
+/// Captures `window` (default foreground; also when covered) or `region` at full resolution:
+/// (BGRA image, screen origin of its top-left pixel, window ref). Shared by screenshot and ocr.
+/// A capture: image, screen origin of its top-left pixel, window ref (None for a region).
+pub type Grab = (Image, (i32, i32), Option<String>);
+
+pub fn grab(p: &Value) -> Result<Grab, ActError> {
+    Ok(if let Some(r) = p.get("region").filter(|v| !v.is_null()) {
         let g = |k: &str| {
             r.get(k)
                 .and_then(Value::as_i64)
@@ -292,18 +312,7 @@ pub fn screenshot(p: &Value) -> Result<Value, ActError> {
             (f.left, f.top),
             Some(winmgr::window_ref(h)),
         )
-    };
-    let (w, h, rgb) = downscale_rgb(&img, scale);
-    let png = png_rgb(w, h, &rgb)?;
-    Ok(json!({
-        "png_base64": base64(&png),
-        "width": w,
-        "height": h,
-        "origin": [origin.0, origin.1],
-        "scale": scale,
-        "window": window,
-        "bytes": png.len(),
-    }))
+    })
 }
 
 #[cfg(test)]

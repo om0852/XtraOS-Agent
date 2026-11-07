@@ -149,6 +149,16 @@ Each milestone adds its cases here before implementation (CLAUDE.md §3).
 | P2-BA-04 | Nested batch / ask_human / unknown tool in steps | `INVALID_ARGS`, nothing executed |
 | P2-BENCH-01 | Routine task (Calculator 7 + 5) via MCP on the release build | ≤ 3 calls, ≤ 2,000 tokens |
 
+### P2-M2 OCR (ADR 0024)
+| ID | Test case | Expected |
+|---|---|---|
+| P2-OCR-01 | `ocr(window)` on the opaque testbed (hand-drawn "Start Game", "Options", "Quit", "Score 1234") | all four texts; each box within 8 px of the drawn rect |
+| P2-OCR-02 | `ocr(query: "Start Game")` → `click(x, y)` at the box centre | exactly that drawn button counts the click |
+| P2-OCR-03 | `ocr(region)` over the same area | same texts, same screen coordinates (± 2 px) |
+| P2-OCR-04 | Token cost vs `screenshot` of the same window | OCR text ≪ screenshot (≤ 1/5) |
+| P2-OCR-05 | `query` with no match / bad args | empty match list (not an error) / `INVALID_ARGS` |
+| P2-OCR-06 | Latency `ocr` window p50 | ≤ 400 ms (bench) |
+
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).
 2. Fix → add/extend a test that would have caught it → re-run the full gate.

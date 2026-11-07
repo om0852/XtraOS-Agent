@@ -25,6 +25,7 @@ reported per release.
 | `type` 50 chars (unicode mode) | 150 ms | 400 ms |
 | `observe` focused window (≤120 elements) | 120 ms | 400 ms |
 | `screenshot` window at 0.5 scale | 60 ms | 150 ms |
+| `ocr` window (P2-M2) | 400 ms | 1,000 ms |
 | Kill switch to input halted | — | 100 ms |
 
 ## Cost levers (in priority order)

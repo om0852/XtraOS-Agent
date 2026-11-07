@@ -6,6 +6,7 @@
 // M5 (ADR 0017): ask_human, wait_for_human; every action passes the core's policy engine and
 // kill switch (BLOCKED_BY_POLICY, STOPPED — only the user resumes, from the tray).
 // P2-M1 (ADR 0022): wait_for, batch, observe(scope_ref) — fewer agent round trips.
+// P2-M2 (ADR 0024): ocr — text with screen coordinates for opaque windows.
 // Coordinates are physical screen pixels; `window` is a ref like "w460650" or the integer handle.
 import type { CoreClient } from './core-client.ts';
 
@@ -260,6 +261,32 @@ export const TOOLS: ToolDef[] = [
         },
       ];
     },
+  },
+  {
+    name: 'ocr',
+    description:
+      'Reads text from pixels with Windows\' built-in OCR (offline) — for opaque windows where observe ' +
+      'finds few elements (games, canvas, custom-drawn apps). Returns lines `"text" @cx,cy (x,y wxh)` in ' +
+      'screen pixels: click(x: cx, y: cy) hits the text. query keeps only matching lines (box of the ' +
+      'matching words). Far fewer tokens than a screenshot.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        window: WINDOW_REQ,
+        region: {
+          type: 'object',
+          properties: { x: X, y: Y, w: { type: 'integer', minimum: 1 }, h: { type: 'integer', minimum: 1 } },
+          required: ['x', 'y', 'w', 'h'],
+          additionalProperties: false,
+          description: 'Screen region in physical pixels (instead of a window)',
+        },
+        query: { type: 'string', minLength: 1 },
+        max_lines: { type: 'integer', minimum: 1, maximum: 500 },
+        language: { type: 'string', description: 'Installed OCR language tag, e.g. en-US (default: user languages)' },
+      },
+      additionalProperties: false,
+    },
+    run: forward('ocr', (r) => r.text),
   },
   {
     name: 'set_value',

@@ -16,7 +16,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Methods from docs/04-mcp-tool-contract.md that exist on paper but not yet in the core.
-const PLANNED_METHODS: &[&str] = &["ocr"];
+const PLANNED_METHODS: &[&str] = &["app_map"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
@@ -364,7 +364,7 @@ mod tests {
         );
         let (o, info) = handle_line(
             &mut conn,
-            r#"{"jsonrpc":"2.0","id":2,"method":"ocr","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"app_map","params":{}}"#,
             &c,
         );
         assert_eq!(code(&o).as_deref(), Some("NOT_IMPLEMENTED"));

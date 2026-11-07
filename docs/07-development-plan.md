@@ -63,7 +63,8 @@ Milestones (ADR 0021): P2-M1 fewer calls (`wait_for`, scoped observe, trusted `b
 P2-M2 OCR · P2-M3 app map + skills engine (Explorer file ops) · P2-M4 messaging skills (F7, in
 an owner-chosen test chat) · P2-M5 elevated helper (F5) · P2-M6 browser bridge + packaging.
 **P2-M1 Fewer calls: closed** (ADRs 0022, 0023) — gate 13/13; routine task 3 calls / ~335 tokens.
-**Current: P2-M2 OCR.**
+**P2-M2 OCR: closed** (ADRs 0024, 0025) — gate 14/14; opaque window read in ~54 tokens, 33 ms.
+**Current: P2-M3 app map + skills engine.**
 
 ## Phase 3 — Reach
 

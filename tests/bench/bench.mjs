@@ -73,6 +73,13 @@ const shot = await ok('screenshot', { window: calc.ref, scale: 0.5 });
 row('screenshot window @0.5', await timeIt(15, () => ok('screenshot', { window: calc.ref, scale: 0.5 })), 60, 150, `${shot.width}x${shot.height} PNG ${Math.round(shot.bytes / 1024)} KB`);
 await call('close_window', { window: calc.ref });
 
+// 2b. ocr of an opaque (hand-drawn) window
+const op = await ok('launch_app', { app: path.join(root, 'testbed', 'bin', 'testbed.exe'), args: ['200', '160', '--opaque'], timeout_ms: 15000 });
+await sleep(800);
+const firstOcr = await ok('ocr', { window: op.ref });
+row('ocr opaque window', await timeIt(15, () => ok('ocr', { window: op.ref })), 400, 1000, `~${Math.ceil(firstOcr.text.length / 4)} tokens, ${firstOcr.lines} lines`);
+await call('close_window', { window: op.ref });
+
 // 3. type 50 chars (unicode mode) into the testbed text box
 const tbExe = path.join(root, 'testbed', 'bin', 'testbed.exe');
 const tb = await ok('launch_app', { app: tbExe, args: ['200', '160'], timeout_ms: 15000 });

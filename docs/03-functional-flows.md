@@ -83,11 +83,13 @@ Inside the skill (no AI round trips):
 4. **Policy: sending messages = confirm** → HITL dialog "Send report.pdf to Rahul?".
 5. Approved → press send → verify the bubble appears → `{ok, sent_at}`.
 
-## F8. Game / canvas app (P3)
+## F8. Game / canvas app (OCR targeting P2-M2; frame helpers P3)
 
 ```text
 observe() → {"opaque": true}
-screenshot(window, scale=0.5, grayscale=true)    # small image
+ocr(window, query="Start Game")                  # P2-M2: text + screen coordinates, no image
+click(x, y)                                      # at the OCR box centre
+screenshot(window, scale=0.5)                    # only when there is no text to read
 mouse(action="click"|"drag"|"path", x, y, space="window")   # window-relative coords
 ```
 Optional per-game helper: core streams frames to a local detector; agent gets compact events.

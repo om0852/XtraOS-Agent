@@ -14,7 +14,9 @@ an update here first. Status: `P1` = Phase 1, `P2` = Phase 2, `P3` = Phase 3.
 ## Error codes
 
 `NOT_PAIRED, STOPPED, BLOCKED_BY_POLICY, NEEDS_HUMAN, ELEVATION_REQUIRED, WINDOW_NOT_FOUND,
-ELEMENT_NOT_FOUND, STALE_REF, TIMEOUT, INVALID_ARGS, NOT_IMPLEMENTED, INTERNAL`
+ELEMENT_NOT_FOUND, STALE_REF, TIMEOUT, INVALID_ARGS, NOT_IMPLEMENTED, INTERNAL,
+USER_ACTIVE` (user held a button/modifier or moved the mouse — action aborted, ADR 0010),
+`TARGET_OBSCURED` (the point is not inside the given window — nothing clicked, ADR 0010)
 
 ## Perception
 
@@ -38,16 +40,19 @@ ELEMENT_NOT_FOUND, STALE_REF, TIMEOUT, INVALID_ARGS, NOT_IMPLEMENTED, INTERNAL`
 
 ## Input
 
+M2 (ADR 0010): targets are `x, y` physical screen pixels; `window` is a native window handle
+(integer). `ref` targets are added in M4, window refs/titles in M3.
+
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
-| `click` | `ref` or point; `button?`, `clicks?` (1–3), `modifiers?` | ok + diff | P1 |
-| `type` | `ref?` (focus first), `text`, `submit?`, `mode?` (unicode/keys) | ok | P1 |
-| `press_keys` | `keys[]` e.g. `["Ctrl+S"]`, `["Alt+Tab"]` | ok | P1 |
-| `scroll` | `ref` or point, `dx?`, `dy?` | ok | P1 |
-| `drag` | `from_ref`/point, `to_ref`/point, `steps?`, `hold_ms?` | ok | P1 |
-| `mouse` | `action` (move/hover/down/up/path), `points?` | ok | P1 |
-| `set_value` | `ref`, `value` (UIA ValuePattern, no typing) | ok | P1 |
-| `clipboard` | `get` / `set(text)` | text | P1 |
+| `click` | `x, y` (M4: or `ref`); `window?`; `button?` (left/right/middle), `clicks?` (1–3), `modifiers?` (ctrl/shift/alt/win) | ok | P1 (M2) |
+| `type` | `window` (required, must be foreground), `text` (≤ 10,000 chars, unicode), `submit?` | ok | P1 (M2) |
+| `press_keys` | `window` (required, must be foreground), `keys[]` e.g. `["Ctrl+S"]` | ok | P1 (M2) |
+| `scroll` | `x, y`, `window?`, `dx?`, `dy?` (notches; dy > 0 scrolls down) | ok | P1 (M2) |
+| `drag` | `from_x, from_y`, `to_x, to_y`, `window?`, `to_window?`, `steps?`, `step_ms?`, `hold_ms?` | ok | P1 (M2) |
+| `mouse` | `action` (move/down/up/path), `x, y` or `points[[x,y],...]`, `button?`, `window?` | ok | P1 (M2) |
+| `set_value` | `ref`, `value` (UIA ValuePattern, no typing) | ok | P1 (M4) |
+| `clipboard` | `op` (get/set), `text?` | text | P1 (M2) |
 | `batch` | `steps[]` of the above (trusted input), `stop_on_error?` | per-step results | P2 |
 
 ## Flow control & human in the loop

@@ -4,9 +4,9 @@ A local **AI action runtime**: the bridge that lets any AI model see and operate
 (apps, browsers, terminals, files, games) safely, fast, and token-efficiently.
 The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 
-> Status: **Phase 1 — M1 closed** (core + secure IPC + MCP `status`, ADR 0009). **Next: M2 Input.**
-> Gates: `tests/phase0/run-tests.ps1` (`-Interactive` moves the mouse / opens Calculator) and
-> `tests/phase1/m1-gate.ps1`.
+> Status: **Phase 1 — M1 + M2 closed** (secure IPC, MCP, real input; ADRs 0009–0011).
+> **Next: M3 Windows & apps.** Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1`,
+> `tests/phase1/m2-gate.ps1` (`-Interactive` moves the mouse and types into the testbed).
 
 ## Documents
 
@@ -30,4 +30,8 @@ The LLM is the brain; XtraOS Agent is the hands, eyes, and seatbelt.
 | Secure local core ↔ MCP connection (user-only pipe, pairing token, reconnect) | verified — M1 gate (ADR 0009) |
 | MCP tool `status` | verified — M1 gate |
 | Action log (no secrets) | verified — M1 gate |
-| Clicking, typing, reading the screen | not yet (M2–M4) |
+| Real mouse input: click (1–3, any button, modifiers), scroll, drag-and-drop, paths | verified — M2 gate (ADR 0011) |
+| Real keyboard input: unicode typing (incl. Hindi, emoji), key chords | verified — M2 gate |
+| Clipboard get/set | verified — M2 gate |
+| Safety guards: user activity → abort, wrong window → refuse, no stuck keys/buttons | verified — M2 gate |
+| Window control, reading the screen | not yet (M3–M4) |

@@ -15,6 +15,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::actionlog::{ActionLog, Entry};
+use crate::input;
 use crate::protocol::{self, Conn, Ctx, ErrorCode, Outcome};
 use crate::winsec::{self, OwnedSecurityAttributes};
 
@@ -141,6 +142,42 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
             Err(e) => return Err(e),
         };
 
+        // OS actions run on a blocking thread; the reply and log reflect the real result.
+        let (outcome, info) = match outcome {
+            Outcome::Execute { id, method, params } => {
+                let m = method.clone();
+                let res = tokio::task::spawn_blocking(move || input::run(&m, &params))
+                    .await
+                    .unwrap_or_else(|e| {
+                        Err(input::ActError {
+                            code: "INTERNAL",
+                            message: format!("action panicked: {e}"),
+                            hint: "",
+                        })
+                    });
+                match res {
+                    Ok(v) => (
+                        Outcome::Reply(serde_json::json!({"jsonrpc":"2.0","id":id,"result":v})),
+                        protocol::LogInfo {
+                            method,
+                            ok: true,
+                            code: None,
+                        },
+                    ),
+                    Err(e) => (
+                        Outcome::Reply(serde_json::json!({"jsonrpc":"2.0","id":id,
+                            "error":{"code":e.code,"message":e.message,"hint":e.hint}})),
+                        protocol::LogInfo {
+                            method,
+                            ok: false,
+                            code: Some(e.code),
+                        },
+                    ),
+                }
+            }
+            other => (other, info),
+        };
+
         shared.log.record(&Entry {
             ts_ms: protocol::now_ms(),
             session: conn.session.as_ref().map(|s| s.id.as_str()),
@@ -154,6 +191,7 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
         let (reply, close) = match outcome {
             Outcome::Reply(v) => (v, false),
             Outcome::ReplyAndClose(v) => (v, true),
+            Outcome::Execute { .. } => unreachable!("executed above"),
         };
         let mut bytes = serde_json::to_vec(&reply).map_err(io::Error::other)?;
         bytes.push(b'\n');

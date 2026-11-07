@@ -2,3 +2,4 @@ spikes/out/
 node_modules/
 target/
 *.log
+testbed/bin/

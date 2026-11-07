@@ -4,7 +4,9 @@
 0 FAIL / 1 SKIP). Toolchain installed and pinned (ADR 0008).
 **M1 Core + IPC: closed** (ADR 0009) — gate 6/6 PASS twice from a clean build
 (`tests/phase1/m1-gate.ps1`). Smart App Control turned off by the owner on this dev machine.
-**Next: M2 Input** (P1-LOG-02 password masking moved here). Only work on the current phase (see CLAUDE.md §3).
+**M2 Input: closed** (ADRs 0010, 0011) — gate 8/8 PASS incl. 11/11 interactive, hands-off run;
+`set_value` and Explorer→app drag
+(P1-IN-07) moved to M4. Only work on the current phase (see CLAUDE.md §3).
 Each milestone has exit criteria; a milestone is done only when all are met and evidenced.
 
 ## Phase 0 — Spikes & skeleton (≈ 1 week)

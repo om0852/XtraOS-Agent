@@ -26,14 +26,7 @@ const PLANNED_METHODS: &[&str] = &[
     "launch_app",
     "close_window",
     "window_bounds",
-    "click",
-    "type",
-    "press_keys",
-    "scroll",
-    "drag",
-    "mouse",
     "set_value",
-    "clipboard",
     "wait_for",
     "ask_human",
     "wait_for_human",
@@ -84,6 +77,12 @@ pub struct Ctx<'a> {
 pub enum Outcome {
     Reply(Value),
     ReplyAndClose(Value),
+    /// An OS action: the I/O layer runs it (blocking thread) and builds the reply.
+    Execute {
+        id: Value,
+        method: String,
+        params: Value,
+    },
 }
 
 /// Summary for the action log (never contains params or the token).
@@ -236,6 +235,18 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
             method,
         ),
         "pair" => invalid(&id, "already paired", &method),
+        m if crate::input::METHODS.contains(&m) => {
+            let params = if params.is_null() { json!({}) } else { params };
+            if !params.is_object() {
+                return invalid(&id, "params must be an object", &method);
+            }
+            let info = LogInfo {
+                method: method.clone(),
+                ok: false,
+                code: None,
+            };
+            (Outcome::Execute { id, method, params }, info)
+        }
         m if PLANNED_METHODS.contains(&m) => {
             let reply = error(
                 &id,
@@ -272,6 +283,7 @@ mod tests {
     fn code(o: &Outcome) -> Option<String> {
         let v = match o {
             Outcome::Reply(v) | Outcome::ReplyAndClose(v) => v,
+            Outcome::Execute { .. } => return None,
         };
         v.pointer("/error/code")
             .and_then(Value::as_str)
@@ -359,7 +371,7 @@ mod tests {
         );
         let (o, info) = handle_line(
             &mut conn,
-            r#"{"jsonrpc":"2.0","id":2,"method":"click","params":{"ref":"e1"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"observe","params":{}}"#,
             &c,
         );
         assert_eq!(code(&o).as_deref(), Some("NOT_IMPLEMENTED"));
@@ -379,5 +391,61 @@ mod tests {
         assert!(constant_time_eq("abc", "abc"));
         assert!(!constant_time_eq("abc", "abd"));
         assert!(!constant_time_eq("abc", "ab"));
+    }
+}
+
+#[cfg(test)]
+mod execute_tests {
+    use super::*;
+
+    #[test]
+    fn input_methods_are_dispatched_for_execution_only_when_paired() {
+        let next = || 1;
+        let c = Ctx {
+            token: "t",
+            pipe: "p",
+            started: Instant::now(),
+            next_session_id: &next,
+        };
+        let mut conn = Conn::default();
+        let (o, _) = handle_line(
+            &mut conn,
+            r#"{"jsonrpc":"2.0","id":1,"method":"click","params":{"x":1,"y":2}}"#,
+            &c,
+        );
+        assert!(
+            matches!(o, Outcome::ReplyAndClose(_)),
+            "unpaired click must be refused"
+        );
+
+        handle_line(
+            &mut conn,
+            r#"{"jsonrpc":"2.0","id":1,"method":"pair","params":{"token":"t"}}"#,
+            &c,
+        );
+        let (o, info) = handle_line(
+            &mut conn,
+            r#"{"jsonrpc":"2.0","id":9,"method":"click","params":{"x":1,"y":2}}"#,
+            &c,
+        );
+        match o {
+            Outcome::Execute { id, method, params } => {
+                assert_eq!(id, json!(9));
+                assert_eq!(method, "click");
+                assert_eq!(params, json!({"x":1,"y":2}));
+            }
+            other => panic!("expected Execute, got {other:?}"),
+        }
+        assert_eq!(info.method, "click");
+
+        let (o, _) = handle_line(
+            &mut conn,
+            r#"{"jsonrpc":"2.0","id":10,"method":"type","params":[1]}"#,
+            &c,
+        );
+        assert!(
+            matches!(o, Outcome::Reply(_)),
+            "non-object params are INVALID_ARGS"
+        );
     }
 }

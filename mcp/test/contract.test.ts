@@ -8,15 +8,15 @@ import { McpClient, ROOT } from './helpers.ts';
 
 const contract = fs.readFileSync(path.join(ROOT, 'docs', '04-mcp-tool-contract.md'), 'utf8');
 const contractTools = new Set([...contract.matchAll(/^\|\s*`([a-z_]+)`\s*\|/gm)].map((m) => m[1]));
-const ALLOWED_M1 = ['status'];
+const ALLOWED = ['click', 'clipboard', 'drag', 'mouse', 'press_keys', 'scroll', 'status', 'type'];
 
-test('tools/list exposes exactly the M1 tools', async () => {
+test('tools/list exposes exactly the built tools (M1 + M2)', async () => {
   const mcp = new McpClient({});
   try {
     await mcp.init();
     const r = await mcp.rpc('tools/list');
     const names = r.result.tools.map((t: { name: string }) => t.name).sort();
-    assert.deepEqual(names, ALLOWED_M1);
+    assert.deepEqual(names, ALLOWED);
   } finally { await mcp.close(); }
 });
 
@@ -37,9 +37,9 @@ test('unknown tool and unexpected arguments are INVALID_ARGS (no core needed)', 
   const mcp = new McpClient({ XTRAOS_PIPE: '\\\\.\\pipe\\xtraos-none', XTRAOS_TOKEN: 'x' });
   try {
     await mcp.init();
-    const a = await mcp.callTool('click', { ref: 'e1' });
+    const a = await mcp.callTool('observe', {});
     assert.ok(a.isError && a.text.startsWith('ERROR INVALID_ARGS'), a.text);
-    const b = await mcp.callTool('status', { bogus: 1 });
+    const b = await mcp.callTool('click', { x: 1, y: 1, bogus: 1 });
     assert.ok(b.isError && b.text.startsWith('ERROR INVALID_ARGS'), b.text);
   } finally { await mcp.close(); }
 });

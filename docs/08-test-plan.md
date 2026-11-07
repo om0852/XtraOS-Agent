@@ -185,6 +185,19 @@ Each milestone adds its cases here before implementation (CLAUDE.md §3).
 | P2-WA-03 | Deny in the dialog | nothing sent, nothing typed |
 | P2-WA-04 | Bad number / no app-map entry | `INVALID_ARGS` / `ELEMENT_NOT_FOUND` before any window opens |
 
+### P2-M5 Elevated admin helper (ADR 0030)
+Automated rows run with the helper UNELEVATED in test mode (no UAC, no human).
+| ID | Test case | Expected |
+|---|---|---|
+| P2-EH-01 | start (test mode), `status`, second start | handshake ok, helper pid in status, no second helper |
+| P2-EH-02 | helper pipe name squatted by another process | helper refuses to run (exit 6) |
+| P2-EH-03 | a process other than the core connects; bad arguments | helper refuses (exit 8 / exit 2) |
+| P2-EH-04 | `elevated_helper stop` | helper process ends |
+| P2-EH-05 | observe via helper → refs ≥ e50000000; click that ref through the core | one helper dialog ("Allow this window"), click reaches the window, no second dialog |
+| P2-EH-06 | ungranted window, Deny; helper refs without a helper | dialog shows the value; `BLOCKED_BY_POLICY`; `STALE_REF` |
+| P2-EH-07 | kill switch | helper ends; after Resume it is not running |
+| P2-EH-F5 | (human, `XTRAOS_TEST_UAC=1`) UAC → admin cmd → `type ipconfig` + Enter → `read_text` | typed via the helper, output read |
+
 ## Bug process
 1. Every FAIL gets an issue with the test ID, output, and environment (DPI, monitors, apps).
 2. Fix → add/extend a test that would have caught it → re-run the full gate.

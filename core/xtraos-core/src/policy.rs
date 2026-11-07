@@ -268,7 +268,9 @@ fn method_class(m: &str) -> Class {
         "observe" | "find" | "read_text" | "screenshot" | "list_windows" | "ocr" | "wait_for" => {
             Class::Observe
         }
-        m if m.starts_with("run_skill:") || m == "app_map" => Class::Observe,
+        m if m.starts_with("run_skill:") || m == "app_map" || m == "elevated_helper" => {
+            Class::Observe
+        }
         "launch_app" => Class::Launch,
         "cleanup" => Class::Close,
         "close_window" => Class::Close,
@@ -327,7 +329,7 @@ pub fn classify(f: &Facts) -> Vec<(Class, String)> {
         }
     }
     if f.elevated {
-        out.push((Class::Elevated, "administrator (UAC) launch".into()));
+        out.push((Class::Elevated, "administrator (UAC) start".into()));
     }
     if f.closes_user_window {
         out.push((Class::CloseUserWindow, "a window you opened".into()));

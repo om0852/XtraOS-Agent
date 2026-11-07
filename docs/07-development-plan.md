@@ -69,6 +69,10 @@ the user's OK; input hooks ignore jitter and the core's own input.
 **P2-M4 messaging + resource discipline: built** (ADRs 0028, 0029). `whatsapp.send` (text and
 file, with the user's OK) sends to the owner's own chat. The agent tracks, reuses and cleans up
 only the windows it opened; closing a user window asks. Closes after the hands-off interactive gate.
+**P2-M5 elevated admin helper: built** (ADRs 0030, 0031). It is opt-in per session through UAC and
+locked to the core. It asks the user in its own elevated dialog for each admin window. The
+automated gate passes 11/11; it closes after the human F5 run with a real UAC prompt.
+**Next: P2-M6 browser bridge + packaging.**
 
 ## Phase 3 — Reach
 

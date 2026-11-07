@@ -14,8 +14,30 @@ fn bad(m: impl Into<String>) -> ActError {
     }
 }
 
-/// Runs one OS method (after `safety::authorize`).
+/// Runs one OS method (after `safety::authorize`). Admin windows go through the elevated
+/// helper when it runs (ADR 0030): requests with helper refs directly, others when the core
+/// itself hits ELEVATION_REQUIRED.
 pub fn dispatch(method: &str, p: &Value) -> Result<Value, ActError> {
+    if method == "elevated_helper" {
+        return crate::helper::run(p);
+    }
+    if crate::helper::owns_refs(p) {
+        return crate::helper::forward(method, p);
+    }
+    match dispatch_local(method, p) {
+        Err(e)
+            if e.code == "ELEVATION_REQUIRED"
+                && crate::helper::ROUTABLE.contains(&method)
+                && crate::helper::connected() =>
+        {
+            crate::helper::forward(method, p)
+        }
+        r => r,
+    }
+}
+
+/// Runs one OS method in this process (the core, or inside the admin helper).
+pub fn dispatch_local(method: &str, p: &Value) -> Result<Value, ActError> {
     if safety::METHODS.contains(&method) {
         safety::run(method, p)
     } else if winmgr::METHODS.contains(&method) {

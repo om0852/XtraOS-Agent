@@ -98,9 +98,16 @@ unsafe fn from_wide(p: *const u16) -> String {
 
 /// String SID of the user running this process, e.g. `S-1-5-21-...-1001`.
 pub fn current_user_sid() -> io::Result<String> {
+    user_sid_of_process(unsafe { GetCurrentProcess() })
+}
+
+/// String SID of the user a process runs as (handle needs PROCESS_QUERY_LIMITED_INFORMATION).
+/// The handle is only passed to Win32, which validates it.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn user_sid_of_process(process: *mut c_void) -> io::Result<String> {
     unsafe {
         let mut token: HANDLE = null_mut();
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
             return Err(io::Error::last_os_error());
         }
         let mut needed = 0u32;

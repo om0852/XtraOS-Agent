@@ -41,6 +41,12 @@ function Stop-Core([string]$exe) {
 
 $coreExe = Join-Path $Prefix 'bin\xtraos-core.exe'
 Stop-Core $coreExe
+# An elevated admin helper (ADR 0030) exits by itself when its core stops; its path is not
+# readable from here, so just wait for it (it never outlives the core).
+$t0 = Get-Date
+while (@(Get-Process xtraos-core -ErrorAction SilentlyContinue | Where-Object { -not $_.Path }).Count -gt 0 -and ((Get-Date) - $t0).TotalSeconds -lt 5) {
+  Start-Sleep -Milliseconds 200
+}
 # MCP servers started by AI clients from this install (stateless; the client restarts them).
 $nodeExe = Join-Path $Prefix 'node\node.exe'
 foreach ($p in @(Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -ieq $nodeExe) })) {

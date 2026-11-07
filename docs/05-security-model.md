@@ -35,6 +35,15 @@ Protected paths (file skills, ADR 0026): Windows folder, Program Files, ProgramD
 users' profiles, UNC paths, drive roots, XtraOS install + data folders → `BLOCKED_BY_POLICY`.
 Deletes go to the Recycle Bin and always ask first.
 
+Elevated admin helper (ADR 0030): opt-in per session, started only through a UAC prompt
+(nothing elevated is installed). One pipe connection, only from the core that started it
+(PID-checked both ways, squatting refused, same binary). The helper asks the user in its own
+elevated dialog before the first action on each admin window (other programs cannot click
+it), acts only on windows that need elevation, never on Windows Security / UAC / credential
+UIs or password fields, and exits with the core, the kill switch, its tray menu or 15 idle
+minutes. Residual risk: malware injected into the core could use an active 10-minute window
+grant; code signing is the fix for a replaced binary.
+
 Resource discipline (ADR 0028): the core tracks the windows it opens, reuses them instead of
 opening duplicates, `cleanup` closes only those, and closing a window the user opened asks
 the user first (`close_user_window`).

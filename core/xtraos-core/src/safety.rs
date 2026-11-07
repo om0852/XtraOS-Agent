@@ -109,7 +109,7 @@ fn err(code: &'static str, message: impl Into<String>, hint: &'static str) -> Ac
     }
 }
 
-fn stopped_err() -> ActError {
+pub fn stopped_err() -> ActError {
     err(
         "STOPPED",
         "stopped by the user (kill switch)",
@@ -221,6 +221,8 @@ pub fn stop() {
     if !STOPPED.swap(true, Ordering::SeqCst) {
         eprintln!("[xtraos-core] kill switch: stopped");
     }
+    // The admin helper ends with the kill switch (ADR 0030); restarting it needs a new UAC.
+    crate::helper::on_kill_switch();
     // Open dialogs are answered "no" (policy confirmations and agent questions alike).
     let mut g = PROMPTS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(map) = g.as_mut() {
@@ -367,6 +369,13 @@ fn point_arg(p: &Value, kx: &str, ky: &str) -> Option<POINT> {
 
 /// Facts about the action, gathered best-effort (bad arguments are reported by the action).
 fn gather(method: &str, p: &Value) -> (Facts, String) {
+    let (f, what, _) = gather_targets(method, p);
+    (f, what)
+}
+
+/// Policy facts, a one-line description, and the top-level windows the action touches
+/// (also used by the admin helper's own approval, ADR 0030).
+pub fn gather_targets(method: &str, p: &Value) -> (Facts, String, Vec<HWND>) {
     let mut f = Facts {
         method: method.to_string(),
         ..Default::default()
@@ -482,6 +491,11 @@ fn gather(method: &str, p: &Value) -> (Facts, String) {
                 .unwrap_or(0);
             what = format!("{what} ({n} characters)");
         }
+        "elevated_helper" => {
+            f.elevated = p.get("op").and_then(Value::as_str) == Some("start");
+            what =
+                "start the XtraOS admin helper (Windows will show an administrator prompt)".into();
+        }
         "launch_app" => {
             f.elevated = p.get("elevated").and_then(Value::as_bool).unwrap_or(false);
             let app = p.get("app").and_then(Value::as_str).unwrap_or("?");
@@ -508,7 +522,7 @@ fn gather(method: &str, p: &Value) -> (Facts, String) {
         }
     }
     f.windows = hwnds.iter().map(|&h| window_facts(h)).collect();
-    (f, what)
+    (f, what, hwnds)
 }
 
 /// Stop flag, safety UI, rate limit, policy (+ confirm dialog), overlay. Blocking.
@@ -955,7 +969,22 @@ fn tray_data(msg: WHWND, tip: &str) -> NOTIFYICONDATAW {
     nid
 }
 
+static HELPER_MODE: AtomicBool = AtomicBool::new(false);
+
+/// This process is the elevated admin helper (ADR 0030): its own tray text and dialog
+/// titles, no global hotkey (the core owns Ctrl+Alt+Esc).
+pub fn set_helper_mode() {
+    HELPER_MODE.store(true, Ordering::SeqCst);
+}
+
+pub fn helper_mode() -> bool {
+    HELPER_MODE.load(Ordering::SeqCst)
+}
+
 fn tray_tip() -> &'static str {
+    if helper_mode() {
+        return "XtraOS admin helper — running as administrator (right-click to stop)";
+    }
     if stopped() {
         "XtraOS Agent — STOPPED (right-click to resume)"
     } else {
@@ -1036,14 +1065,15 @@ fn ui_thread(tx: std::sync::mpsc::Sender<Ui>) {
         let _ = SetWindowDisplayAffinity(overlay, WINDOW_DISPLAY_AFFINITY(0x11));
         UI_FONT.with(|f| f.set(font(10, false).0 as isize));
         TASKBAR_CREATED.with(|t| t.set(RegisterWindowMessageW(w!("TaskbarCreated"))));
-        let hotkey = RegisterHotKey(
-            Some(msg),
-            HOTKEY_ID,
-            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            VK_ESCAPE.0 as u32,
-        )
-        .is_ok();
-        if !hotkey {
+        let hotkey = !helper_mode()
+            && RegisterHotKey(
+                Some(msg),
+                HOTKEY_ID,
+                MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+                VK_ESCAPE.0 as u32,
+            )
+            .is_ok();
+        if !hotkey && !helper_mode() {
             eprintln!(
                 "[xtraos-core] Ctrl+Alt+Esc is taken by another program: use the tray icon to stop"
             );

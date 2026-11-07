@@ -7,8 +7,17 @@ use std::sync::Arc;
 
 use xtraos_core::{actionlog::ActionLog, ipc, pairing, protocol};
 
+fn main() {
+    // `--elevated-helper …`: this process is the admin helper (ADR 0030), not the core.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--elevated-helper") {
+        std::process::exit(xtraos_core::helper::helper_main(&args));
+    }
+    core_main();
+}
+
 #[tokio::main]
-async fn main() {
+async fn core_main() {
     if let Err(e) = run().await {
         eprintln!("[xtraos-core] fatal: {e}");
         std::process::exit(1);

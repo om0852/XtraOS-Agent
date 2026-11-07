@@ -219,6 +219,7 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                 "pipe": ctx.pipe,
                 "stopped": crate::safety::stopped(),
                 "kill_hotkey": crate::safety::hotkey_name(),
+                "admin_helper": crate::helper::status_json(),
             }),
             method,
         ),
@@ -227,7 +228,10 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
             || crate::winmgr::METHODS.contains(&m)
             || crate::perceive::METHODS.contains(&m)
             || crate::safety::METHODS.contains(&m)
-            || matches!(m, "batch" | "app_map" | "list_skills" | "run_skill") =>
+            || matches!(
+                m,
+                "batch" | "app_map" | "list_skills" | "run_skill" | "elevated_helper"
+            ) =>
         {
             let params = if params.is_null() { json!({}) } else { params };
             if !params.is_object() {

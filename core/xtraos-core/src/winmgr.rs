@@ -167,7 +167,7 @@ pub fn elevation_required(what: &str) -> ActError {
     err(
         "ELEVATION_REQUIRED",
         format!("{what}: the window belongs to an elevated (administrator) process"),
-        "Windows blocks normal programs from controlling admin windows (UIPI). The opt-in elevated helper (Phase 2) is needed.",
+        "Windows blocks normal programs from admin windows (UIPI). Start the admin helper with elevated_helper {op: \"start\"}: the user approves a Windows prompt.",
     )
 }
 
@@ -216,6 +216,16 @@ pub fn pid_of(h: HWND) -> u32 {
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(h, &mut pid) };
     pid
+}
+
+/// Full image path of a process by handle (needs PROCESS_QUERY_LIMITED_INFORMATION).
+pub fn image_path_of_handle(p: *mut c_void) -> Option<String> {
+    let mut buf = [0u16; 1024];
+    let mut n = buf.len() as u32;
+    if unsafe { QueryFullProcessImageNameW(p, 0, buf.as_mut_ptr(), &mut n) } == 0 {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&buf[..n as usize]))
 }
 
 pub fn process_name(pid: u32) -> String {
@@ -293,8 +303,30 @@ fn token_elevated(p: HANDLE) -> Option<bool> {
     }
 }
 
-fn own_integrity() -> u32 {
+pub fn own_integrity() -> u32 {
     integrity_of_process(unsafe { GetCurrentProcess() }).unwrap_or(0x2000)
+}
+
+/// Integrity level of a process by handle (needs PROCESS_QUERY_LIMITED_INFORMATION).
+pub fn integrity_of_handle(p: *mut c_void) -> Option<u32> {
+    integrity_of_process(p)
+}
+
+/// Integrity level of the process that owns a window (None if unreadable).
+pub fn integrity_of_window(h: HWND) -> Option<u32> {
+    let pid = pid_of(h);
+    if pid == 0 {
+        return None;
+    }
+    unsafe {
+        let p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if p.is_null() {
+            return None;
+        }
+        let il = integrity_of_process(p);
+        CloseHandle(p);
+        il
+    }
 }
 
 /// True if the window's process runs at a higher integrity level than the core, or its token

@@ -48,7 +48,7 @@ const RESTORE = { type: 'boolean', description: 'Put the cursor back afterwards 
 const how = (r: any) =>
   r.mode === 'background' ? ` · background (${r.via}${r.foreground_restored ? ', focus kept' : ''})` : ' · input';
 
-type Status = { version: string; session: string; client: string; state: string; uptime_ms: number; kill_hotkey: string | null };
+type Status = { version: string; session: string; client: string; state: string; uptime_ms: number; kill_hotkey: string | null; admin_helper?: { running: boolean; pid?: number } };
 
 /** Forwards to the core and renders a compact one-line result (docs/06: <= 30 tokens). */
 const forward = (method: string, render: (r: any, a: Record<string, unknown>) => string) =>
@@ -65,7 +65,8 @@ export const TOOLS: ToolDef[] = [
     async run(core) {
       const s = (await core.call('status')) as Status;
       return `XtraOS core ${s.version} · ${s.state} · session ${s.session} (${s.client}) · up ${Math.round(s.uptime_ms / 1000)}s` +
-        (s.kill_hotkey ? ` · stop: ${s.kill_hotkey}` : ' · stop: tray icon');
+        (s.kill_hotkey ? ` · stop: ${s.kill_hotkey}` : ' · stop: tray icon') +
+        (s.admin_helper?.running ? ` · admin helper on (pid ${s.admin_helper.pid})` : '');
     },
   },
   {
@@ -504,6 +505,23 @@ export const TOOLS: ToolDef[] = [
       additionalProperties: false,
     },
     run: forward('close_window', (r) => `ok closed ${r.ref}`),
+  },
+  {
+    name: 'elevated_helper',
+    description:
+      'Admin windows (e.g. "Administrator: Command Prompt") cannot be controlled by normal programs; tools on them return ' +
+      'ELEVATION_REQUIRED. op=start asks the user (an XtraOS dialog, then the Windows administrator prompt) to start the ' +
+      'XtraOS admin helper for this session; afterwards observe/find/read_text/click/type/press_keys/... on admin windows ' +
+      'work as usual (results carry via: "admin_helper"), and the helper asks the user before the first action on each ' +
+      'admin window. If the user declines: NEEDS_HUMAN, do not retry without asking. op=stop ends it (also ends with the ' +
+      'kill switch or after 15 idle minutes); op=status.',
+    inputSchema: {
+      type: 'object',
+      properties: { op: { type: 'string', enum: ['start', 'stop', 'status'] } },
+      required: ['op'],
+      additionalProperties: false,
+    },
+    run: forward('elevated_helper', (r) => r.text),
   },
   {
     name: 'cleanup',

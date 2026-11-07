@@ -41,6 +41,7 @@ M3 (ADR 0012): a window is referenced as `w<handle>` (e.g. `w460650`) or the int
 | `launch_app` | `app` (name/path/AUMID or app-map service), `args?`, `elevated?`, `reuse?` (default true: same app+args still open from the agent → that window), `timeout_ms?` | ref of the new (or reused) window | P1 (M3; reuse P2-M4) |
 | `close_window` | `window`, `timeout_ms?` | ok (graceful WM_CLOSE; else `NEEDS_HUMAN`); a window the agent did not open asks the user first (P2-M4) | P1 (M3) |
 | `cleanup` | — | closes every still-open window the agent opened (only those); lists what is left | P2 (M4) |
+| `elevated_helper` | op: start \| stop \| status | start: core dialog (class `elevated`) then the Windows UAC prompt; afterwards tools on admin windows are forwarded to the helper (`via: "admin_helper"`, refs ≥ e50000000), each admin window needs the user's OK in the helper's own dialog; declined UAC → `NEEDS_HUMAN` | P2 (M5) |
 | `window_bounds` | `window`, `x?,y?,w?,h?` (visible frame), `state?` (minimize/maximize/restore) | bounds + state | P1 (M3) |
 
 Input, close and bounds on an elevated window return `ELEVATION_REQUIRED` (ADR 0012).

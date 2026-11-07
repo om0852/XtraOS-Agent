@@ -676,6 +676,15 @@ impl Table {
     }
 }
 
+/// The admin helper numbers its refs from here (ADR 0030), so refs never collide and the core
+/// knows which process owns one.
+pub const HELPER_REF_BASE: u32 = 50_000_000;
+
+/// Start numbering refs at `base` (admin helper process only).
+pub fn set_ref_base(base: u32) {
+    with_table(|t| t.next = t.next.max(base));
+}
+
 pub fn parse_elem_ref(v: &Value) -> Option<u32> {
     v.as_str()
         .and_then(|s| s.strip_prefix('e'))

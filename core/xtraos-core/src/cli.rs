@@ -171,7 +171,8 @@ pub fn call_main(args: &[String]) -> i32 {
         }
         Some(s) => s.to_string(),
     };
-    let params: Value = match serde_json::from_str(raw.trim()) {
+    // Windows PowerShell pipes text with a UTF-8 byte-order mark; it is never part of the JSON.
+    let params: Value = match serde_json::from_str(raw.trim_start_matches('\u{feff}').trim()) {
         Ok(v @ Value::Object(_)) => v,
         Ok(_) => {
             eprintln!("params must be a JSON object, e.g. {{\"op\":\"get\"}} (or - to read it from stdin)");

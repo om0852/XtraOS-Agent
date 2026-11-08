@@ -104,8 +104,9 @@ async fn sb01_05_channel_tokens_test_mode_and_stop() {
         .call("sandbox", json!({"op": "call", "tool": "status"}))
         .await;
     assert_eq!(code(&gone), "NEEDS_HUMAN", "no sandbox running: {gone}");
-    let start = core.call("sandbox", json!({"op": "start"})).await;
+    // Only without the feature: with it, start would boot a real Sandbox (that is sb_live).
     if !std::path::Path::new(r"C:\Windows\System32\WindowsSandbox.exe").exists() {
+        let start = core.call("sandbox", json!({"op": "start"})).await;
         assert_eq!(
             code(&start),
             "NEEDS_HUMAN",
@@ -116,6 +117,8 @@ async fn sb01_05_channel_tokens_test_mode_and_stop() {
     core.stop().await;
     std::env::remove_var("XTRAOS_SANDBOX_EXCHANGE");
     std::env::remove_var("XTRAOS_SANDBOX_SESSION");
+    // The core runs inside this test binary: share the real xtraos-core.exe, not this one.
+    std::env::set_var("XTRAOS_SANDBOX_PROGRAM", exe());
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -129,14 +132,36 @@ async fn sb_live_work_inside_the_sandbox() {
         eprintln!("SKIP: enable Windows Sandbox, then set XTRAOS_TEST_SANDBOX=1");
         return;
     }
+    // The channel test sets these for its private folders; the live run uses the real ones.
+    std::env::remove_var("XTRAOS_SANDBOX_EXCHANGE");
+    std::env::remove_var("XTRAOS_SANDBOX_SESSION");
+    // The core runs inside this test binary: share the real xtraos-core.exe, not this one.
+    std::env::set_var("XTRAOS_SANDBOX_PROGRAM", exe());
     let mut core = Core::start().await;
     let s = core.ok("sandbox", json!({"op": "start"})).await;
     eprintln!("SB-LIVE start: {}", s["text"]);
+    // Windows Sandbox has no Notepad (a Store app on Windows 11); Character Map is built in.
+    // The Sandbox window is normally not in front on the user's desktop, so Windows inside does
+    // not let a window come to the front: text goes in by UIA (set_value), in the background.
     let w = core
-        .ok("sandbox", json!({"op": "call", "tool": "launch_app", "args": {"app": "notepad", "timeout_ms": 30000}, "timeout_ms": 60000}))
+        .ok("sandbox", json!({"op": "call", "tool": "launch_app", "args": {"app": "charmap", "timeout_ms": 30000}, "timeout_ms": 60000}))
         .await;
     let win = w["ref"].as_str().unwrap().to_string();
-    core.ok("sandbox", json!({"op": "call", "tool": "type", "args": {"window": win, "text": "typed inside the sandbox", "idle_ms": 0}}))
+    let f = core
+        .ok(
+            "sandbox",
+            json!({"op": "call", "tool": "find", "args": {"window": win, "query": "copy"}}),
+        )
+        .await;
+    let edit = f["text"]
+        .as_str()
+        .unwrap_or("")
+        .lines()
+        .find(|l| l.contains(" Edit \"Characters to copy"))
+        .and_then(|l| l.split(' ').next())
+        .expect("the Characters to copy box")
+        .to_string();
+    core.ok("sandbox", json!({"op": "call", "tool": "set_value", "args": {"window": win, "ref": edit, "value": "typed inside the sandbox"}}))
         .await;
     let r = core
         .ok(
@@ -154,7 +179,7 @@ async fn sb_live_work_inside_the_sandbox() {
     let shot = core
         .ok(
             "sandbox",
-            json!({"op": "call", "tool": "screenshot", "args": {"scale": 0.3}}),
+            json!({"op": "call", "tool": "screenshot", "args": {"window": win, "scale": 0.5}}),
         )
         .await;
     assert!(shot["png_base64"].as_str().is_some_and(|b| b.len() > 1000));

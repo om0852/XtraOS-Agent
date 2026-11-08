@@ -195,7 +195,7 @@ async fn wa03_04_deny_bad_number_no_map() {
     let _s = SERIAL.lock().await;
     let home = private_home();
     let mut core = Core::start().await;
-    let before = xtraos_core::winmgr::listable_windows().len();
+    let before = xtraos_core::winmgr::listable_windows();
 
     let r = wa(&mut core, json!({"phone": "12-34", "text": "x"})).await;
     assert_eq!(code(&r), "INVALID_ARGS", "{r}");
@@ -222,11 +222,20 @@ async fn wa03_04_deny_bad_number_no_map() {
     let r = wa(&mut core, json!({"phone": "+00 00000 00000", "text": "x"})).await;
     human.join().unwrap().expect("dialog");
     assert_eq!(code(&r), "ELEMENT_NOT_FOUND", "no app map entry: {r}");
-    assert_eq!(
-        xtraos_core::winmgr::listable_windows().len(),
-        before,
-        "nothing opened"
-    );
+    std::thread::sleep(Duration::from_millis(500)); // the dialog windows close
+    let new: Vec<String> = xtraos_core::winmgr::listable_windows()
+        .into_iter()
+        .filter(|h| !before.contains(h))
+        .map(|h| {
+            let p = xtraos_core::winmgr::pid_of(h);
+            format!(
+                "{} \"{}\" (pid {p})",
+                xtraos_core::winmgr::process_name(p),
+                xtraos_core::winmgr::title(h)
+            )
+        })
+        .collect();
+    assert!(new.is_empty(), "nothing opened, but new windows: {new:?}");
     eprintln!("WA-03/04 ok");
     core.stop().await;
     let _ = std::fs::remove_dir_all(home);

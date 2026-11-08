@@ -30,6 +30,11 @@ pub struct Core {
     wr: tokio::io::WriteHalf<NamedPipeClient>,
     id: u64,
     dir: PathBuf,
+    /// Set by `start_process`: the core's own process and its stdout (kept open).
+    process: Option<(
+        std::process::Child,
+        std::io::BufReader<std::process::ChildStdout>,
+    )>,
 }
 
 impl Core {
@@ -54,6 +59,7 @@ impl Core {
             wr,
             id: 0,
             dir,
+            process: None,
         };
         let r = core
             .call("pair", json!({"token": token, "client": "test"}))
@@ -70,7 +76,7 @@ impl Core {
             .await
             .unwrap();
         let mut s = String::new();
-        tokio::time::timeout(Duration::from_secs(90), self.rd.read_line(&mut s))
+        tokio::time::timeout(Duration::from_secs(150), self.rd.read_line(&mut s))
             .await
             .expect("core reply timeout")
             .unwrap();
@@ -84,9 +90,68 @@ impl Core {
         r["result"].clone()
     }
 
+    /// A core in its own process (the real xtraos-core.exe, private home, random pipe), for
+    /// tests that need the real binary: the admin helper only serves a core whose image is
+    /// its own exe, so an in-process core (this test binary) can never pass F5.
+    pub async fn start_process(exe: &std::path::Path) -> Self {
+        use std::io::BufRead;
+        input::init_dpi();
+        let pipe = format!(r"\\.\pipe\xtraos-t-{}", rand_hex(6));
+        let token = rand_hex(32);
+        let dir = std::env::temp_dir().join(format!("xtraos-t-{}", rand_hex(4)));
+        let mut child = std::process::Command::new(exe)
+            .env("XTRAOS_PIPE", &pipe)
+            .env("XTRAOS_TOKEN", &token)
+            .env("XTRAOS_HOME", &dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("start xtraos-core.exe");
+        let mut out = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        while out.read_line(&mut line).unwrap_or(0) > 0 && !line.starts_with("READY") {
+            line.clear();
+        }
+        assert!(line.starts_with("READY"), "the core did not start");
+        let p = ClientOptions::new().open(&pipe).unwrap();
+        let (rd, wr) = tokio::io::split(p);
+        let log = Arc::new(ActionLog::create(&dir.join("test-client")).unwrap());
+        let mut core = Core {
+            server: None,
+            log,
+            rd: BufReader::new(rd),
+            wr,
+            id: 0,
+            dir,
+            process: Some((child, out)),
+        };
+        let r = core
+            .call("pair", json!({"token": token, "client": "test"}))
+            .await;
+        assert!(r.get("result").is_some(), "{r}");
+        core
+    }
+
     pub async fn stop(mut self) {
-        self.server.take().unwrap().shutdown().await.unwrap();
+        if let Some(s) = self.server.take() {
+            s.shutdown().await.unwrap();
+        }
+        if let Some((mut child, _out)) = self.process.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         std::fs::remove_dir_all(&self.dir).ok();
+    }
+}
+
+impl Drop for Core {
+    /// A failed test never reaches `stop`: still end a core process (it would keep the kill
+    /// switch hotkey and break every later test).
+    fn drop(&mut self) {
+        if let Some((mut child, _out)) = self.process.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 

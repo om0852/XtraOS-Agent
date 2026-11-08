@@ -305,7 +305,8 @@ async fn eh_f5_admin_command_prompt() {
         return;
     }
     let _s = SERIAL.lock().await;
-    let mut core = Core::start().await;
+    // The real binary: the helper serves only a core whose image is its own exe.
+    let mut core = Core::start_process(&exe()).await;
     let r = core.call("elevated_helper", json!({"op": "start"})).await;
     eprintln!("F5 helper: {r}");
     assert!(r.get("result").is_some(), "{r}");

@@ -1,0 +1,4 @@
+# Static C runtime: xtraos-core.exe must run on a clean Windows (Windows Sandbox, PCs without
+# the Visual C++ redistributable). ADR 0040.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

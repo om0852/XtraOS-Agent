@@ -50,18 +50,31 @@ fn base() -> PathBuf {
     crate::pairing::data_dir().join("sandbox")
 }
 
+/// Host folders shared into the Sandbox: `%USERPROFILE%\.xtraos-sandbox`. Windows Sandbox
+/// fails to share folders under AppData (0x80070003, found live: ADR 0040), so neither the
+/// data folder nor the install folder is shared. With XTRAOS_HOME (tests) it stays under it.
+pub fn shared_base() -> PathBuf {
+    match (
+        std::env::var_os("XTRAOS_HOME"),
+        std::env::var_os("USERPROFILE"),
+    ) {
+        (None, Some(home)) => PathBuf::from(home).join(".xtraos-sandbox"),
+        _ => base(),
+    }
+}
+
 /// Exchange folder (override for tests: XTRAOS_SANDBOX_EXCHANGE).
 pub fn exchange_dir() -> PathBuf {
     std::env::var_os("XTRAOS_SANDBOX_EXCHANGE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| base().join("exchange"))
+        .unwrap_or_else(|| shared_base().join("exchange"))
 }
 
 /// Session folder with the per-start token (read-only inside the Sandbox).
 pub fn session_dir() -> PathBuf {
     std::env::var_os("XTRAOS_SANDBOX_SESSION")
         .map(PathBuf::from)
-        .unwrap_or_else(|| base().join("session"))
+        .unwrap_or_else(|| shared_base().join("session"))
 }
 
 fn sandbox_exe() -> PathBuf {
@@ -154,13 +167,33 @@ fn start(p: &Value) -> Result<Value, ActError> {
     if !sandbox_exe().exists() {
         return Err(not_installed());
     }
+    if sandbox_window_open() {
+        // Windows allows only one Sandbox. Never reset the folders an open one has mapped.
+        if launched_recently() {
+            // Ours, still booting (its first start can install updates for minutes): wait.
+            return wait_ready(
+                &ex,
+                "Windows Sandbox is open, and XtraOS inside it now answers",
+            );
+        }
+        return Err(err(
+            "NEEDS_HUMAN",
+            "a Windows Sandbox that XtraOS did not start is open (Windows allows only one)",
+            "Ask the user to close that Sandbox window (everything inside it is discarded), then sandbox start again.",
+        ));
+    }
     let network = p.get("network").and_then(Value::as_bool).unwrap_or(false);
-    let program = std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(Path::to_path_buf))
-        .ok_or_else(|| err("INTERNAL", "own folder unknown", ""))?;
     let session = session_dir();
     let io = |e: std::io::Error| err("INTERNAL", format!("sandbox folders: {e}"), "");
+    // A copy of this program, shared read-only (the install folder is under AppData).
+    let program = shared_base().join("program");
+    std::fs::create_dir_all(&program).map_err(io)?;
+    // This program, or (tests, whose core runs inside the test binary) XTRAOS_SANDBOX_PROGRAM.
+    let exe = match std::env::var_os("XTRAOS_SANDBOX_PROGRAM") {
+        Some(p) => PathBuf::from(p),
+        None => std::env::current_exe().map_err(io)?,
+    };
+    std::fs::copy(&exe, program.join("xtraos-core.exe")).map_err(io)?;
     let _ = std::fs::remove_dir_all(&ex);
     std::fs::create_dir_all(ex.join("req")).map_err(io)?;
     std::fs::create_dir_all(ex.join("resp")).map_err(io)?;
@@ -171,10 +204,17 @@ fn start(p: &Value) -> Result<Value, ActError> {
         .map(|b| format!("{b:02x}"))
         .collect();
     std::fs::write(session.join("session.token"), &token).map_err(io)?;
+    let _ = std::fs::remove_file(session.join("next")); // request numbers start at 1 again
     let wsb = base().join("xtraos.wsb");
     std::fs::write(&wsb, wsb_xml(&program, &ex, &session, network)).map_err(io)?;
-    std::process::Command::new(sandbox_exe())
+    // No inherited handles: WindowsSandbox.exe outlives this call and would keep a caller's
+    // output pipe open (a shell reading it would wait until the Sandbox closes).
+    crate::cli::keep_std_handles_private();
+    let child = std::process::Command::new(sandbox_exe())
         .arg(&wsb)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| {
             err(
@@ -183,22 +223,71 @@ fn start(p: &Value) -> Result<Value, ActError> {
                 "",
             )
         })?;
+    *LAUNCHER.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+    *LAUNCHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+    wait_ready(
+        &ex,
+        &format!(
+            "ok sandbox started (network {}); its XtraOS answers. Use sandbox call {{tool, args}}; the user's desktop is not touched",
+            if network { "on" } else { "off" }
+        ),
+    )
+}
+
+/// When this core last launched a Sandbox; an open Sandbox is taken as ours only shortly after.
+static LAUNCHED: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+/// The WindowsSandbox.exe this core started. It stays running, windowless, after the Sandbox
+/// inside has shut down, so `stop` ends it.
+static LAUNCHER: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+
+/// After the agent inside shut the Sandbox down: give its window time to close, then end the
+/// launcher this core started (only that process, never a Sandbox the user opened).
+fn end_launcher() {
+    let Some(mut child) = LAUNCHER.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        return;
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while sandbox_window_open() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    if let Ok(None) = child.try_wait() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+const OURS_FOR: Duration = Duration::from_secs(30 * 60);
+
+fn launched_recently() -> bool {
+    LAUNCHED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some_and(|t| t.elapsed() < OURS_FOR)
+}
+
+/// True when a Windows Sandbox window is open on this desktop.
+fn sandbox_window_open() -> bool {
+    crate::winmgr::listable_windows().into_iter().any(|h| {
+        crate::winmgr::process_name(crate::winmgr::pid_of(h)).starts_with("windowssandbox")
+    })
+}
+
+/// Waits up to 120 s for the inner agent's heartbeat.
+fn wait_ready(ex: &Path, text: &str) -> Result<Value, ActError> {
     let deadline = Instant::now() + Duration::from_secs(120);
     while Instant::now() < deadline {
         crate::safety::check()?;
-        if let Some(h) = heartbeat(&ex) {
-            return Ok(json!({
-                "text": format!("ok sandbox started (network {}); its XtraOS answers. Use sandbox call {{tool, args}}; the user's desktop is not touched",
-                    if network { "on" } else { "off" }),
-                "running": true, "agent": h,
-            }));
+        if let Some(h) = heartbeat(ex) {
+            return Ok(json!({"text": text, "running": true, "agent": h}));
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+    let inner = std::fs::read_to_string(ex.join("agent.txt"))
+        .map(|t| format!("XtraOS inside says: {}", t.trim()))
+        .unwrap_or_else(|_| "XtraOS inside has not started yet".into());
     Err(err(
         "TIMEOUT",
-        "Windows Sandbox opened but XtraOS inside did not answer within 120 s",
-        "Look at the Sandbox window; close it and try again.",
+        format!("Windows Sandbox is open but XtraOS inside has not answered within 120 s ({inner})"),
+        "Its first start installs updates and can take several minutes: run sandbox start again to keep waiting (it does not open a second one). If the window shows an error, close it and start again.",
     ))
 }
 
@@ -225,11 +314,11 @@ pub fn call(tool: &str, args: &Value, timeout: Duration) -> Result<Value, ActErr
         SEQ.fetch_add(1, Ordering::Relaxed)
     );
     let req = json!({"id": id, "token": token.trim(), "tool": tool, "args": args});
-    write_atomic(
-        &ex.join("req").join(format!("{id}.json")),
-        &serde_json::to_vec(&req).unwrap_or_default(),
-    )
-    .map_err(|e| err("INTERNAL", format!("sandbox request: {e}"), ""))?;
+    let n = next_request_number(&session_dir())
+        .map_err(|e| err("INTERNAL", format!("sandbox request: {e}"), ""))?;
+    let req_file = ex.join("req").join(format!("{n}.json"));
+    write_atomic(&req_file, &serde_json::to_vec(&req).unwrap_or_default())
+        .map_err(|e| err("INTERNAL", format!("sandbox request: {e}"), ""))?;
     let resp = ex.join("resp").join(format!("{id}.json"));
     let deadline = Instant::now() + timeout;
     loop {
@@ -281,7 +370,7 @@ pub fn call(tool: &str, args: &Value, timeout: Duration) -> Result<Value, ActErr
             ));
         }
         if Instant::now() > deadline {
-            let _ = std::fs::remove_file(ex.join("req").join(format!("{id}.json")));
+            let _ = std::fs::remove_file(&req_file);
             return Err(err(
                 "TIMEOUT",
                 format!("no answer from the sandbox within {} s", timeout.as_secs()),
@@ -329,8 +418,10 @@ pub fn run(p: &Value) -> Result<Value, ActError> {
             )
         }
         "stop" => {
-            call("__shutdown", &json!({}), Duration::from_secs(15))?;
-            Ok(json!({"text": "ok sandbox stopping: everything inside it is discarded"}))
+            // As long as any call: the shared folder sometimes shows a request 10-20 s late.
+            call("__shutdown", &json!({}), Duration::from_secs(60))?;
+            end_launcher();
+            Ok(json!({"text": "ok sandbox stopped: everything inside it is discarded"}))
         }
         o => Err(bad(format!("unknown op '{o}'"))),
     }
@@ -354,15 +445,27 @@ pub fn agent_main(args: &[String]) -> i32 {
         .and_then(|i| rest.get(i + 1))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\XtraOSSession"));
-    let inside = std::env::var("USERNAME").is_ok_and(|u| u.eq_ignore_ascii_case(SANDBOX_USER));
+    // Nobody sees stderr inside the Sandbox: the host reads this note when start times out.
+    let note = |m: &str| {
+        eprintln!("[xtraos-sandbox] {m}");
+        let _ = std::fs::write(ex.join("agent.txt"), m);
+    };
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    let inside = user.eq_ignore_ascii_case(SANDBOX_USER);
     if !inside && !test {
-        eprintln!("[xtraos-sandbox] refusing: this is not a Windows Sandbox session");
+        note(&format!(
+            "refusing: not a Windows Sandbox session (user '{user}')"
+        ));
         return 3;
     }
     let Ok(token) = std::fs::read_to_string(session.join("session.token")) else {
-        eprintln!("[xtraos-sandbox] no session token");
+        note("no session token in the session folder");
         return 4;
     };
+    note(&format!(
+        "started (pid {}, user '{user}')",
+        std::process::id()
+    ));
     let token = token.trim().to_string();
     if inside {
         crate::safety::ensure_started(); // its own tray, kill switch and dialogs
@@ -372,22 +475,38 @@ pub fn agent_main(args: &[String]) -> i32 {
     let _ = std::fs::create_dir_all(&req_dir);
     let _ = std::fs::create_dir_all(&resp_dir);
     let mut last_beat = Instant::now() - Duration::from_secs(10);
+    // Requests are numbered 1, 2, 3… (host counter, reset at start). Inside the Sandbox a
+    // listing of the shared folder shows a new file only ~10-20 s late (found live, ADR 0040),
+    // so the next number is opened by name; the listing is only a 2 s fallback to resync.
+    let mut next: u64 = 1;
+    let mut last_scan = Instant::now();
     loop {
         if last_beat.elapsed() >= Duration::from_secs(2) {
             let hb = json!({"pid": std::process::id(), "version": crate::protocol::VERSION, "test": test});
             let _ = write_atomic(&ex.join("ready.json"), hb.to_string().as_bytes());
             last_beat = Instant::now();
         }
-        let mut files: Vec<PathBuf> = std::fs::read_dir(&req_dir)
-            .map(|r| {
-                r.flatten()
-                    .map(|e| e.path())
-                    .filter(|p| p.extension().is_some_and(|x| x == "json"))
-                    .collect()
-            })
-            .unwrap_or_default();
-        files.sort();
+        let direct = req_dir.join(format!("{next}.json"));
+        let mut files: Vec<PathBuf> = Vec::new();
+        if direct.exists() {
+            files.push(direct);
+        } else if last_scan.elapsed() >= Duration::from_secs(2) {
+            last_scan = Instant::now();
+            files = std::fs::read_dir(&req_dir)
+                .map(|r| {
+                    r.flatten()
+                        .map(|e| e.path())
+                        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            files.sort_by_key(|p| (request_number(p).unwrap_or(u64::MAX), p.clone()));
+        }
+        let busy = !files.is_empty();
         for f in files {
+            if let Some(k) = request_number(&f) {
+                next = next.max(k + 1);
+            }
             let too_big = std::fs::metadata(&f)
                 .map(|m| m.len() > MAX_REQUEST)
                 .unwrap_or(true);
@@ -437,13 +556,45 @@ pub fn agent_main(args: &[String]) -> i32 {
                 reply.to_string().as_bytes(),
             );
         }
-        std::thread::sleep(Duration::from_millis(40));
+        if !busy {
+            std::thread::sleep(Duration::from_millis(40));
+        }
     }
+}
+
+/// `req/17.json` → 17.
+fn request_number(p: &Path) -> Option<u64> {
+    p.file_stem()?.to_str()?.parse().ok()
+}
+
+/// The next request number of this Sandbox session (host side; counter in the session folder).
+fn next_request_number(session: &Path) -> std::io::Result<u64> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let f = session.join("next");
+    let n: u64 = std::fs::read_to_string(&f)
+        .ok()
+        .and_then(|t| t.trim().parse().ok())
+        .unwrap_or(1);
+    std::fs::write(&f, (n + 1).to_string())?;
+    Ok(n)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requests_are_numbered_from_one_per_session() {
+        let d = std::env::temp_dir().join(format!("xtraos-sbn-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let _ = std::fs::remove_file(d.join("next"));
+        let got: Vec<u64> = (0..3).map(|_| next_request_number(&d).unwrap()).collect();
+        assert_eq!(got, vec![1, 2, 3]);
+        assert_eq!(request_number(Path::new(r"C:\x\req\17.json")), Some(17));
+        assert_eq!(request_number(Path::new(r"C:\x\req\1-2.json")), None);
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     #[test]
     fn wsb_is_isolated_and_escaped() {

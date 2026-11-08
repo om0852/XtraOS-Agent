@@ -323,11 +323,11 @@ pub fn stop() {
     // Open dialogs are answered "no" (policy confirmations and agent questions alike).
     let mut g = PROMPTS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(map) = g.as_mut() {
-        for (id, p) in map.iter_mut() {
+        for p in map.values_mut() {
             if p.open {
                 p.result.get_or_insert(p.cancel);
                 p.open = false;
-                post(WM_APP_CLOSE_PROMPT, *id as usize);
+                post_close_prompt(p.hwnd);
             }
         }
     }
@@ -954,8 +954,17 @@ fn close_prompt(id: u64) {
         .and_then(|m| m.get_mut(&id))
     {
         p.open = false;
+        post_close_prompt(p.hwnd);
     }
-    post(WM_APP_CLOSE_PROMPT, id as usize);
+}
+
+/// Asks the UI thread to destroy a dialog. It carries the window itself, not the prompt id:
+/// the caller forgets the prompt right after, and a dialog looked up by id then would stay
+/// on screen, dead (found by the P2-M4 WA-03 test).
+fn post_close_prompt(hwnd: usize) {
+    if hwnd != 0 {
+        post(WM_APP_CLOSE_PROMPT, hwnd);
+    }
 }
 
 fn forget_prompt(id: u64) {
@@ -1413,14 +1422,13 @@ unsafe extern "system" fn ui_proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
             LRESULT(0)
         }
         WM_APP_CLOSE_PROMPT => {
-            let hwnd = PROMPTS
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-                .and_then(|m| m.get(&(wp.0 as u64)))
-                .map(|p| p.hwnd);
-            if let Some(hw) = hwnd.filter(|&x| x != 0) {
-                let _ = DestroyWindow(WHWND(hw as _));
+            // wParam is the dialog window. Destroy it only if it still is one of our dialogs
+            // (never a window that reused a stale handle).
+            let hw = WHWND(wp.0 as _);
+            let mut cls = [0u16; 32];
+            let n = GetClassNameW(hw, &mut cls);
+            if n > 0 && String::from_utf16_lossy(&cls[..n as usize]) == "XtraOSPrompt" {
+                let _ = DestroyWindow(hw);
             }
             LRESULT(0)
         }
@@ -1760,19 +1768,19 @@ fn from_hardware_input(button: WHWND) -> bool {
 /// separate process cannot call this (ADR 0041).
 #[doc(hidden)]
 pub fn answer_prompt_for_tests(i: usize) -> bool {
-    let id = PROMPTS
+    let open = PROMPTS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .and_then(|m| {
             m.iter()
                 .find(|(_, p)| p.open && p.hwnd != 0)
-                .map(|(id, _)| *id)
+                .map(|(id, p)| (*id, p.hwnd))
         });
-    match id {
-        Some(id) => {
+    match open {
+        Some((id, hwnd)) => {
             answer(id, i);
-            post(WM_APP_CLOSE_PROMPT, id as usize);
+            post_close_prompt(hwnd);
             true
         }
         None => false,

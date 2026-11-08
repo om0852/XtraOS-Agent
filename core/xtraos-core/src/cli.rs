@@ -61,6 +61,27 @@ fn open_pipe(name: &str) -> std::io::Result<std::fs::File> {
         .open(name)
 }
 
+/// Before starting a process that outlives the caller (the core, Windows Sandbox): stop this
+/// process's console/pipe handles from being inherited. `Stdio::null()` is not enough, because
+/// Windows hands every inheritable handle to the child, and a shell reading this process's
+/// output would then wait until that long-lived child exits. (Rust's `Stdio::inherit()`
+/// duplicates the handle, so later short-lived children still get their output through.)
+pub(crate) fn keep_std_handles_private() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetStdHandle(n: u32) -> *mut std::ffi::c_void;
+        fn SetHandleInformation(h: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
+    }
+    const HANDLE_FLAG_INHERIT: u32 = 1;
+    for n in [0xFFFF_FFF6u32, 0xFFFF_FFF5, 0xFFFF_FFF4] {
+        // STD_INPUT, STD_OUTPUT, STD_ERROR
+        let h = unsafe { GetStdHandle(n) };
+        if !h.is_null() && h as isize != -1 {
+            unsafe { SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0) };
+        }
+    }
+}
+
 /// Connects; starts the core (hidden, detached) once if nothing answers.
 fn connect() -> Result<(std::fs::File, String), String> {
     if let (Some(p), Some(t)) = (pipe(), token()) {
@@ -76,21 +97,7 @@ fn connect() -> Result<(std::fs::File, String), String> {
         use std::os::windows::process::CommandExt;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        // The long-lived core must not inherit this CLI's console/pipe handles, or the
-        // caller's shell waits for the core to exit before it sees end-of-output.
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn GetStdHandle(n: u32) -> *mut std::ffi::c_void;
-            fn SetHandleInformation(h: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
-        }
-        const HANDLE_FLAG_INHERIT: u32 = 1;
-        for n in [0xFFFF_FFF6u32, 0xFFFF_FFF5, 0xFFFF_FFF4] {
-            // STD_INPUT, STD_OUTPUT, STD_ERROR
-            let h = unsafe { GetStdHandle(n) };
-            if !h.is_null() && h as isize != -1 {
-                unsafe { SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0) };
-            }
-        }
+        keep_std_handles_private();
         std::process::Command::new(&exe)
             .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
             .stdin(std::process::Stdio::null())

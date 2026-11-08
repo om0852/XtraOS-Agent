@@ -280,14 +280,16 @@ async function F10(f) {
   f.expect(st.text.includes('· stopped ·'), 'status says stopped');
   const o = await f.call('observe', { window: w }, 'agent tries to continue');
   f.expect(o.text.startsWith('ERROR STOPPED'), 'refused while stopped');
-  // The human resumes from the tray (Resume = WM_COMMAND 1002 to the core's tray window).
+  // A program posting the tray "Resume" command (WM_COMMAND 1002) must NOT resume (ADR 0041):
+  // only the user's real click on the tray menu does, which belongs to the human pass.
   const pid = JSON.parse(fs.readFileSync(path.join(f.mcp.home, 'connection.json'), 'utf8')).pid;
   ps(`Add-Type -Namespace T -Name W -MemberDefinition '[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowExW(IntPtr p, IntPtr a, string c, string t); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid); [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr h, uint m, UIntPtr w, IntPtr l);'; $h=[IntPtr]::Zero; while (($h=[T.W]::FindWindowExW([IntPtr]::Zero,$h,'XtraOSCoreUi',[NullString]::Value)) -ne [IntPtr]::Zero) { [uint32]$p=0; [void][T.W]::GetWindowThreadProcessId($h,[ref]$p); if ($p -eq ${pid}) { [void][T.W]::PostMessageW($h,0x111,[UIntPtr]::new([uint64]1002),[IntPtr]::Zero) } }`);
-  f.note('The user resumed from the tray menu (recorder posts the tray "Resume" command; there is no MCP tool for it).');
   await sleep(300);
-  const st2 = await f.call('status', {}, 'after the user resumed');
-  f.expect(st2.text.includes('· running ·'), 'running again');
-  await f.call('close_window', { window: w }, 'clean up');
+  const st2 = await f.call('status', {}, 'after a program posted Resume');
+  f.expect(st2.text.includes('· stopped ·'), 'a posted Resume is ignored: still stopped');
+  f.note('Resuming needs the user\'s real click on the tray menu (human pass); the recorder only checks that a posted Resume does nothing.');
+  // The core stays stopped, so it cannot close the window: end the testbed directly.
+  ps(`Get-Process testbed -ErrorAction SilentlyContinue | Stop-Process -Force`);
   void s;
 }
 
@@ -296,7 +298,7 @@ const FLOWS = {
   F3: ['Chrome search → close → Firefox (no extension) search → close', F3],
   F4: ['Drag a file from Explorer onto a web page drop zone (refs)', F4],
   F6: ['Terminal: run a command and read its output', F6],
-  F10: ['Kill switch during a long drag, then the user resumes', F10],
+  F10: ['Kill switch during a long drag; a posted Resume is ignored', F10],
   F8: ['Opaque (hand-drawn) window: observe finds nothing, OCR finds and clicks the text', F8],
   S1: ['Routine file task in ONE call: macro skill (new folder + copy + open)', S1],
   R1: ['Routine task in ≤ 3 calls: Calculator 7 + 5 with wait_for + batch (P2-BENCH-01)', R1],

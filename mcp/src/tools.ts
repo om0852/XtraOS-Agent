@@ -535,10 +535,13 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'sandbox',
     description:
-      'A separate, disposable Windows desktop (Windows Sandbox) where the agent works with its OWN cursor and keyboard, ' +
-      'in parallel with the user. op=start (network: false by default; returns NEEDS_HUMAN if the user has not enabled ' +
-      'Windows Sandbox), call {tool, args} runs any XtraOS tool inside it (results carry via: "sandbox"), stop discards ' +
-      'everything, status. Nothing from the user’s profile is inside; move files via the shared exchange folder.',
+      'A separate, disposable Windows desktop (Windows Sandbox) where the agent works in parallel with the user, ' +
+      'without touching the user’s cursor or keyboard. op=start (network: false by default; the first start can take ' +
+      'minutes, start again keeps waiting; NEEDS_HUMAN if Windows Sandbox is not enabled or the user has their own ' +
+      'Sandbox open), call {tool, args} runs any XtraOS tool inside it (results carry via: "sandbox"), stop discards ' +
+      'everything, status. Inside, enter text with set_value and press buttons with click on a ref (UI Automation): ' +
+      'while the Sandbox window is in the background Windows does not let a window come to the front, so type/press_keys ' +
+      'return NEEDS_HUMAN. Built-in apps only (no Notepad or Store apps). Nothing from the user’s profile is inside.',
     inputSchema: {
       type: 'object',
       properties: {

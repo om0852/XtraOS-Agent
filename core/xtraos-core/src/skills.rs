@@ -226,7 +226,7 @@ pub fn protected_reason(p: &Path, own: &[PathBuf]) -> Option<String> {
 }
 
 fn own_dirs() -> Vec<PathBuf> {
-    let mut v = vec![crate::pairing::data_dir()];
+    let mut v = vec![crate::pairing::data_dir(), crate::sandbox::shared_base()];
     if let Ok(exe) = std::env::current_exe() {
         // <prefix>\bin\xtraos-core.exe → protect <prefix>
         if let Some(prefix) = exe.parent().and_then(Path::parent) {

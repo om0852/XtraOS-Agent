@@ -51,8 +51,12 @@ foreach ($s in $steps) {
   if ($s.Name -like 'INTERACTIVE*') { '>>> Interactive: hands off the mouse and keyboard...' }
   Push-Location (Join-Path $root $s.Dir)
   $sw = [Diagnostics.Stopwatch]::StartNew()
-  $out = cmd /c "$($s.Cmd) 2>&1"
+  # Output goes to a file, not a pipe: a process a step leaves running (e.g. a windowless
+  # WindowsSandbox.exe) would otherwise keep the pipe open and the gate would wait forever.
+  $log = Join-Path ([IO.Path]::GetTempPath()) "xtraos-gate-step.log"
+  cmd /c "$($s.Cmd) > `"$log`" 2>&1"
   $code = $LASTEXITCODE
+  $out = Get-Content $log -Encoding UTF8
   Pop-Location
   $results += [pscustomobject]@{ Step = $s.Name; Status = $(if ($code -eq 0) { 'PASS' } else { 'FAIL' }); Seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1) }
   if ($code -ne 0) { "---- $($s.Name) output ----"; $out | Select-Object -Last 60 }

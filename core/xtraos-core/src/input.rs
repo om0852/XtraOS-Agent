@@ -107,6 +107,7 @@ pub const VK_CONTROL: u16 = 0x11;
 pub const VK_MENU: u16 = 0x12;
 pub const VK_LWIN: u16 = 0x5B;
 const VK_RETURN: u16 = 0x0D;
+const VK_ESCAPE: u16 = 0x1B;
 const VK_TAB: u16 = 0x09;
 
 #[link(name = "user32")]
@@ -591,13 +592,26 @@ impl MouseGuard {
 struct ButtonHold {
     up: u32,
     down: bool,
+    /// A drag: if it ends early (user moved the mouse, kill switch, error), press Esc before
+    /// releasing, which cancels a Windows drag-and-drop, so nothing is dropped wherever the
+    /// cursor happens to be (seen live: a desktop shortcut landed in the user's browser).
+    cancel_on_abort: bool,
 }
 
 impl ButtonHold {
     fn press(b: Button) -> Result<Self, ActError> {
         let (d, u) = b.flags();
         send(&[mouse(d, 0, 0, 0)])?;
-        Ok(ButtonHold { up: u, down: true })
+        Ok(ButtonHold {
+            up: u,
+            down: true,
+            cancel_on_abort: false,
+        })
+    }
+    fn press_for_drag(b: Button) -> Result<Self, ActError> {
+        let mut h = Self::press(b)?;
+        h.cancel_on_abort = true;
+        Ok(h)
     }
     fn release(&mut self) -> Result<(), ActError> {
         if self.down {
@@ -610,6 +624,10 @@ impl ButtonHold {
 
 impl Drop for ButtonHold {
     fn drop(&mut self) {
+        if self.down && self.cancel_on_abort {
+            let _ = send_always(&[key_event(VK_ESCAPE, false), key_event(VK_ESCAPE, true)]);
+            sleep(Duration::from_millis(30));
+        }
         let _ = self.release();
     }
 }
@@ -1171,7 +1189,7 @@ fn drag(p: &Value) -> Result<Value, ActError> {
     g.check_target(from, None)?;
     g.move_to(from)?;
     g.before_button(from, None)?;
-    let mut hold = ButtonHold::press(button)?;
+    let mut hold = ButtonHold::press_for_drag(button)?;
     sleep(Duration::from_millis(hold_ms));
     for i in 1..=steps {
         let t = i as f64 / steps as f64;

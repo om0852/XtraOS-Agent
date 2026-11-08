@@ -199,6 +199,7 @@ export const TOOLS: ToolDef[] = [
         window: WINDOW_REQ,
         scope_ref: { ...REF, description: 'Only this element\'s subtree (a list, pane or dialog): fewer tokens on big windows' },
         full: { type: 'boolean', description: 'Full list instead of a diff' },
+        bounds: { type: 'boolean', description: 'Also each element\'s screen place: @cx,cy (x,y wxh) (full list)' },
         max_elements: { type: 'integer', minimum: 1, maximum: 500, description: 'Default 120' },
       },
       additionalProperties: false,

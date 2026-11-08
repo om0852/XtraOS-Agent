@@ -24,7 +24,7 @@ USER_ACTIVE` (user held a button/modifier or moved the mouse — action aborted,
 
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
-| `observe` | `window?` (default foreground), `scope_ref?` (one element's subtree, P2-M1), `full?`, `max_elements?` (default 120) | element lines with refs, or a diff (`+`/`-`/`~`) on repeat; `opaque` flag | P1 (M4) |
+| `observe` | `window?` (default foreground), `scope_ref?` (one element's subtree, P2-M1), `full?`, `bounds?` (each line + `@cx,cy (x,y wxh)` screen place; full list), `max_elements?` (default 120) | element lines with refs, or a diff (`+`/`-`/`~`) on repeat; `opaque` flag | P1 (M4) |
 | `screenshot` | `window?` or `region?` `{x,y,w,h}`, `scale?` (default 0.5, 0.1–1) | PNG + mapping `screen = origin + px/scale` | P1 (M4) |
 | `read_text` | `window` or `ref`, `last_lines?` | text (UIA TextPattern / Value / Name); never password values | P1 (M4) |
 | `find` | `query` (name/role/automation-id substring), `window?`, `deep?` (virtualised list rows via ItemContainerPattern; exact name fast, partial scan ≤ `timeout_ms`, default 3000, max 15000) | matching refs (≤ 20); off-screen rows marked `(offscreen)`, virtualised ones `(virtualized: realized when used)`; `click(ref)` on a row selects (never opens) | P1 (M4), deep P2 (M7) |

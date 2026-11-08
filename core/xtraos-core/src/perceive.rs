@@ -1016,7 +1016,10 @@ fn observe(p: &Value) -> Result<Value, ActError> {
     }
     let t0 = Instant::now();
     let h = target_window(p)?;
-    let full = p.get("full").and_then(Value::as_bool).unwrap_or(false);
+    // `bounds`: each line also gets its on-screen place, `@cx,cy (x,y wxh)` (as ocr), e.g. to
+    // plan where to drag desktop icons. Always the full list (positions are not diffed).
+    let bounds = p.get("bounds").and_then(Value::as_bool).unwrap_or(false);
+    let full = bounds || p.get("full").and_then(Value::as_bool).unwrap_or(false);
     let max = match p.get("max_elements") {
         None | Some(Value::Null) => 120,
         Some(v) => v
@@ -1054,7 +1057,16 @@ fn observe(p: &Value) -> Result<Value, ActError> {
         for &i in &keep {
             let r = t.ref_for(win, &nodes[i]);
             let l = nodes[i].info.line();
-            ordered.push(format!("e{r} {l}"));
+            if bounds {
+                let (x, y, w, h) = nodes[i].info.rect;
+                ordered.push(format!(
+                    "e{r} {l} @{},{} ({x},{y} {w}x{h})",
+                    x + w / 2,
+                    y + h / 2
+                ));
+            } else {
+                ordered.push(format!("e{r} {l}"));
+            }
             lines.insert(r, l);
         }
         t.touch(win);

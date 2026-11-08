@@ -107,6 +107,7 @@ extern "system" {
     fn GetWindowRect(h: HWND, r: *mut RECT) -> BOOL;
     fn AttachThreadInput(a: u32, b: u32, attach: BOOL) -> BOOL;
     fn PostMessageW(h: HWND, msg: u32, w: usize, l: isize) -> BOOL;
+    fn FindWindowExW(parent: HWND, after: HWND, class: *const u16, title: *const u16) -> HWND;
 }
 
 #[link(name = "dwmapi")]
@@ -188,10 +189,44 @@ pub fn parse_ref(v: &Value) -> Option<usize> {
     .filter(|&n| n != 0)
 }
 
-/// Resolves a `window` argument to an existing top-level window handle.
+/// The window that shows the desktop icons: Progman, or a WorkerW (wallpaper slideshow), the
+/// one holding SHELLDLL_DefView. It is not in list_windows (no Alt+Tab entry).
+pub fn desktop_window() -> Option<HWND> {
+    let defview = wide("SHELLDLL_DefView");
+    for class in ["Progman", "WorkerW"] {
+        let class = wide(class);
+        let mut h: HWND = std::ptr::null_mut();
+        loop {
+            h = unsafe { FindWindowExW(std::ptr::null_mut(), h, class.as_ptr(), std::ptr::null()) };
+            if h.is_null() {
+                break;
+            }
+            let view = unsafe {
+                FindWindowExW(h, std::ptr::null_mut(), defview.as_ptr(), std::ptr::null())
+            };
+            if !view.is_null() {
+                return Some(h);
+            }
+        }
+    }
+    None
+}
+
+/// Resolves a `window` argument to an existing top-level window handle. `"desktop"` is the
+/// desktop icon view.
 pub fn resolve_window(v: &Value) -> Result<HWND, ActError> {
-    let n = parse_ref(v)
-        .ok_or_else(|| bad("window must be a ref like \"w123\" or a handle integer"))?;
+    if v.as_str() == Some("desktop") {
+        return desktop_window().ok_or_else(|| {
+            err(
+                "WINDOW_NOT_FOUND",
+                "no desktop icon view (is Explorer running?)",
+                "",
+            )
+        });
+    }
+    let n = parse_ref(v).ok_or_else(|| {
+        bad("window must be a ref like \"w123\", a handle integer, or \"desktop\"")
+    })?;
     let h = n as HWND;
     if unsafe { IsWindow(h) } == 0 {
         return Err(err(

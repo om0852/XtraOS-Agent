@@ -58,7 +58,7 @@ Input, close and bounds on an elevated window return `ELEVATION_REQUIRED` (ADR 0
 
 ## Input
 
-M2 (ADR 0010): targets are `x, y` physical screen pixels. M3: `window` = `w<handle>`.
+M2 (ADR 0010): targets are `x, y` physical screen pixels. M3: `window` = `w<handle>`, or `"desktop"` for the desktop icon view (not in `list_windows`; its icons are ListItems, moved with `drag` from_ref).
 M4 (ADRs 0014, 0015): `ref` targets act **in the background** first (UI Automation pattern, no
 cursor, no keys); results end with `mode=background` or `mode=input`. Real input waits until
 the user is idle ≥ `idle_ms` (default 800, 0 = off) and puts the cursor back afterwards

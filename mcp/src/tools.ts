@@ -27,9 +27,9 @@ export type ToolDef = {
 const int = (description: string) => ({ type: 'integer', description });
 const WINDOW = {
   type: ['string', 'integer'],
-  description: 'Window ref from list_windows (e.g. "w460650") or its integer handle. Mouse: optional guard (point must be inside it). Keyboard: required and must be the foreground window.',
+  description: 'Window ref from list_windows (e.g. "w460650") or its integer handle, or "desktop" for the desktop icon view. Mouse: optional guard (point must be inside it). Keyboard: required and must be the foreground window.',
 };
-const WINDOW_REQ = { type: ['string', 'integer'], description: 'Window ref from list_windows (e.g. "w460650") or its integer handle' };
+const WINDOW_REQ = { type: ['string', 'integer'], description: 'Window ref from list_windows (e.g. "w460650") or its integer handle, or "desktop" for the desktop icon view' };
 
 type Win = { ref: string; process: string; title: string; x: number; y: number; w: number; h: number; state: string; focused: boolean; elevated: boolean; agent?: boolean; reused?: boolean };
 /** One compact line per window (docs/06 token budget). */

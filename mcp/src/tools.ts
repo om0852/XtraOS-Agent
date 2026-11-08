@@ -29,6 +29,7 @@ const WINDOW = {
   type: ['string', 'integer'],
   description: 'Window ref from list_windows (e.g. "w460650") or its integer handle, or "desktop" for the desktop icon view. Mouse: optional guard (point must be inside it). Keyboard: required and must be the foreground window.',
 };
+const FOCUS = { type: 'boolean', description: 'Bring the window to the front first (like focus_window), default false' };
 const WINDOW_REQ = { type: ['string', 'integer'], description: 'Window ref from list_windows (e.g. "w460650") or its integer handle, or "desktop" for the desktop icon view' };
 
 type Win = { ref: string; process: string; title: string; x: number; y: number; w: number; h: number; state: string; focused: boolean; elevated: boolean; agent?: boolean; reused?: boolean };
@@ -101,6 +102,7 @@ export const TOOLS: ToolDef[] = [
         window: WINDOW,
         text: { type: 'string', maxLength: 10000, description: 'Text to type' },
         submit: { type: 'boolean', description: 'Press Enter afterwards' },
+        focus: FOCUS,
         idle_ms: IDLE, timeout_ms: TIMEOUT,
       },
       required: ['window', 'text'],
@@ -118,6 +120,7 @@ export const TOOLS: ToolDef[] = [
       properties: {
         window: WINDOW,
         keys: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100, description: 'Chords, pressed in order' },
+        focus: FOCUS,
         idle_ms: IDLE, timeout_ms: TIMEOUT,
       },
       required: ['window', 'keys'],
@@ -150,7 +153,8 @@ export const TOOLS: ToolDef[] = [
       'Real drag-and-drop: press at the start, move in steps, release at the end. Ends are element refs ' +
       '(from_ref / to_ref, e.g. a file in Explorer) or points (from_x/from_y, to_x/to_y). Works with OS ' +
       'drag-and-drop. `window` guards the start, `to_window` the drop point. Waits for the user to be idle; ' +
-      'the button is released if anything fails.',
+      'if it ends early it cancels (Esc) instead of dropping. A drop at x,y onto another item (a folder, the ' +
+      'Recycle Bin) is refused with TARGET_OCCUPIED unless drop_on_item is true; to_ref targets are intended.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -159,6 +163,7 @@ export const TOOLS: ToolDef[] = [
         idle_ms: IDLE, timeout_ms: TIMEOUT, restore_cursor: RESTORE,
         steps: { type: 'integer', minimum: 1, maximum: 500, description: 'Intermediate moves (default 20)' },
         step_ms: { type: 'integer', minimum: 0, maximum: 200, description: 'Delay per step (default 12)' },
+        drop_on_item: { type: 'boolean', description: 'Allow dropping at x,y onto another item (default false)' },
         hold_ms: { type: 'integer', minimum: 0, maximum: 2000, description: 'Pause after press and before release (default 60)' },
       },
       additionalProperties: false,
@@ -434,7 +439,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'list_skills',
     description:
-      'Lists skills: one call does a whole routine task. Built-in: files.list/open/mkdir/copy/move/rename/delete ' +
+      'Lists skills: one call does a whole routine task. Built-in: files.list/find/open/mkdir/copy/move/rename/delete ' +
       '(through the Windows shell; never overwrites; delete goes to the Recycle Bin after the user\'s OK; ' +
       'system and XtraOS folders are protected). Plus the user\'s macro skills. app filters by prefix (e.g. "files").',
     inputSchema: { type: 'object', properties: { app: { type: 'string' } }, additionalProperties: false },

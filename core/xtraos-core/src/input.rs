@@ -660,6 +660,19 @@ fn modifiers_held() -> bool {
         .any(|&vk| held(vk as i32))
 }
 
+/// `focus: true` (type, press_keys): bring the window to the front first, as focus_window
+/// would, so one call does it. The foreground is still re-checked before every chunk/chord.
+fn focus_if_asked(p: &Value, window: HWND) -> Result<(), ActError> {
+    if p.get("focus").and_then(Value::as_bool).unwrap_or(false) && !crate::winmgr::focus(window) {
+        return Err(err(
+            "NEEDS_HUMAN",
+            "Windows did not allow the window to come to the front; no keys were sent",
+            "Ask the user to click the window once, then retry.",
+        ));
+    }
+    Ok(())
+}
+
 fn foreground_is(window: HWND) -> Result<(), ActError> {
     let fg = unsafe { GetForegroundWindow() };
     if fg.is_null() || unsafe { GetAncestor(fg, GA_ROOT) } != window {
@@ -1184,6 +1197,24 @@ fn drag(p: &Value) -> Result<Value, ActError> {
     if modifiers_held() {
         return Err(user_active("a modifier key is held"));
     }
+    // Never drop onto another item by accident (a folder swallows the file, the Recycle Bin
+    // deletes it). Checked before the button goes down, for drops at x,y only: `to_ref` names
+    // the target on purpose, and `drop_on_item: true` says so for a point.
+    let drop_on_item = p.get("to_ref").is_some_and(|v| !v.is_null())
+        || p.get("drop_on_item")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    if !drop_on_item {
+        if let Some((role, name)) = crate::perceive::item_at(to) {
+            if crate::perceive::item_at(from) != Some((role, name.clone())) {
+                return Err(err(
+                    "TARGET_OCCUPIED",
+                    format!("({},{}) is on {role} \"{name}\": dropping there would put the dragged item into it, nothing was dragged", to.x, to.y),
+                    "Pick an empty spot (observe with bounds shows where items are), or pass drop_on_item: true if dropping onto it is the goal.",
+                ));
+            }
+        }
+    }
     let start = cursor();
     let mut g = MouseGuard::begin(window)?;
     g.check_target(from, None)?;
@@ -1223,6 +1254,7 @@ fn type_text(p: &Value) -> Result<Value, ActError> {
             "a modifier key is held (typed text would become shortcuts)",
         ));
     }
+    focus_if_asked(p, window)?;
     foreground_is(window)?;
     let chars = text_events(text);
     let idle = InputIdle::open(window);
@@ -1301,6 +1333,7 @@ fn press_keys(p: &Value) -> Result<Value, ActError> {
     if modifiers_held() {
         return Err(user_active("a modifier key is held"));
     }
+    focus_if_asked(p, window)?;
     for c in &chords {
         foreground_is(window)?;
         let _mods = ModHold::press(&c.mods)?;

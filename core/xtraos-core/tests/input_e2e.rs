@@ -463,6 +463,47 @@ async fn in09_keyboard_refused_when_target_is_not_foreground() {
     core.stop().await;
 }
 
+// IN-09b: `focus: true` brings a minimised target to the front, then types / presses keys
+// (one call instead of focus_window + type); without it the keyboard is still refused.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "interactive: types into the testbed"]
+async fn in09b_focus_true_brings_the_window_forward_then_types() {
+    let _s = SERIAL.lock().await;
+    let mut tb = Testbed::start();
+    let mut core = Core::start().await;
+    click_ok(&mut core, &tb, "text", json!({})).await; // the text field has keyboard focus
+    core.ok(
+        "window_bounds",
+        json!({"window": tb.hwnd, "state": "minimize"}),
+    )
+    .await;
+    std::thread::sleep(Duration::from_millis(400));
+    let r = core
+        .call("type", json!({"window": tb.hwnd, "text": "no"}))
+        .await;
+    assert_eq!(code(&r), "NEEDS_HUMAN", "not in front, no focus: {r}");
+    core.ok(
+        "type",
+        json!({"window": tb.hwnd, "text": "focused", "focus": true}),
+    )
+    .await;
+    assert_eq!(tb.state()["text"], "focused");
+    core.ok(
+        "window_bounds",
+        json!({"window": tb.hwnd, "state": "minimize"}),
+    )
+    .await;
+    std::thread::sleep(Duration::from_millis(400));
+    core.ok(
+        "press_keys",
+        json!({"window": tb.hwnd, "keys": ["Ctrl+A", "Backspace"], "focus": true}),
+    )
+    .await;
+    assert_eq!(tb.state()["text"], "");
+    assert_nothing_stuck();
+    core.stop().await;
+}
+
 // P1-IN-10: the "user" moves the mouse mid-drag → abort, button released, drag incomplete.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "interactive: drags inside the testbed"]

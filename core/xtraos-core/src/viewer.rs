@@ -148,7 +148,7 @@ fn decision(d: Option<&Decision>) -> &'static str {
 }
 
 /// Local time "YYYY-MM-DD HH:MM:SS" for a unix-ms timestamp (Windows time-zone rules).
-fn local_time(ms: u64) -> String {
+pub(crate) fn local_time(ms: u64) -> String {
     #[repr(C)]
     #[derive(Default)]
     struct SystemTime {

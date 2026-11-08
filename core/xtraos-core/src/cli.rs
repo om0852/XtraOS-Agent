@@ -173,8 +173,17 @@ pub fn call_main(args: &[String]) -> i32 {
     };
     let params: Value = match serde_json::from_str(raw.trim()) {
         Ok(v @ Value::Object(_)) => v,
-        _ => {
+        Ok(_) => {
             eprintln!("params must be a JSON object, e.g. {{\"op\":\"get\"}} (or - to read it from stdin)");
+            return 2;
+        }
+        Err(e) => {
+            eprintln!("params are not valid JSON: {e}");
+            if raw.contains('\\') {
+                // The usual cause on Windows: a path with single backslashes ("C:\Users" has the
+                // invalid escape \U). Never guessed: "C:\new" would silently become a newline.
+                eprintln!("hint: in JSON a backslash must be doubled (\"C:\\\\Users\") or use forward slashes (\"C:/Users\")");
+            }
             return 2;
         }
     };

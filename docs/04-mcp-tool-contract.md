@@ -17,6 +17,7 @@ an update here first. Status: `P1` = Phase 1, `P2` = Phase 2, `P3` = Phase 3.
 ELEMENT_NOT_FOUND, STALE_REF, TIMEOUT, INVALID_ARGS, NOT_IMPLEMENTED, INTERNAL,
 USER_ACTIVE` (user held a button/modifier or moved the mouse — action aborted, ADR 0010),
 `TARGET_OBSCURED` (the point is not inside the given window — nothing clicked, ADR 0010),
+`TARGET_OCCUPIED` (a drag would drop onto another item such as a folder or the Recycle Bin — nothing dragged),
 `STALE_REF` (the element of a ref is gone or its window closed — observe again, ADR 0015).
 `NEEDS_HUMAN` also when the screen is locked or a UAC/secure prompt is showing (ADR 0025).
 
@@ -68,10 +69,10 @@ all real-input tools accept `idle_ms`. `drag` ends can be refs: `from_ref`, `to_
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
 | `click` | `x, y` or `ref`; `window?`; `button?` (left/right/middle), `clicks?` (1–3), `modifiers?` (ctrl/shift/alt/win) | ok | P1 (M2) |
-| `type` | `window` (required, must be foreground), `text` (≤ 10,000 chars, unicode), `submit?` | ok; returns once the app has the text (M6: `settled`) | P1 (M2) |
-| `press_keys` | `window` (required, must be foreground), `keys[]` e.g. `["Ctrl+S"]` | ok | P1 (M2) |
+| `type` | `window` (required, must be foreground, or `focus: true` brings it to the front first), `text` (≤ 10,000 chars, unicode), `submit?` | ok; returns once the app has the text (M6: `settled`) | P1 (M2) |
+| `press_keys` | `window` (required, must be foreground, or `focus: true`), `keys[]` e.g. `["Ctrl+S"]` | ok | P1 (M2) |
 | `scroll` | `x, y` or `ref`, `window?`, `dx?`, `dy?` (notches; dy > 0 scrolls down) | ok | P1 (M2; ref M4) |
-| `drag` | `from_ref` or `from_x, from_y`; `to_ref` or `to_x, to_y`; `window?`, `to_window?`, `steps?`, `step_ms?`, `hold_ms?` | ok | P1 (M2; refs M4) |
+| `drag` | `from_ref` or `from_x, from_y`; `to_ref` or `to_x, to_y`; `window?`, `to_window?`, `steps?`, `step_ms?`, `hold_ms?`, `drop_on_item?` | ok; ends early → cancelled (Esc), nothing dropped; a drop at x,y onto another item → `TARGET_OCCUPIED` unless `drop_on_item` (a `to_ref` target is intended) | P1 (M2; refs M4) |
 | `mouse` | `action` (move/down/up/path), `x, y` or `points[[x,y],...]`, `button?`, `window?` | ok | P1 (M2) |
 | `set_value` | `ref`, `value` (UIA ValuePattern, no typing; password field → `NEEDS_HUMAN`) | ok `mode=background` | P1 (M4) |
 | `clipboard` | `op` (get/set), `text?` | text | P1 (M2) |

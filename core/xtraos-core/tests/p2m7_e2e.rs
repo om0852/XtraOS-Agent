@@ -95,6 +95,43 @@ async fn lo01_offscreen_rows_found_and_selected() {
     core.stop().await;
 }
 
+// DG-01: a drag whose drop point (x,y) is on another item is refused before any input
+// (TARGET_OCCUPIED), so nothing can land in a folder or the Recycle Bin by accident; observe
+// with bounds gives the item's place.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "opens the testbed"]
+async fn dg01_drop_onto_an_item_is_refused() {
+    let _s = SERIAL.lock().await;
+    let mut core = Core::start().await;
+    let tb = Testbed::start(160, 160);
+    let o = core
+        .ok("observe", json!({"window": tb.window(), "bounds": true}))
+        .await;
+    let line = text(&o)
+        .lines()
+        .find(|l| l.contains("ListItem \"Item 2\""))
+        .map(str::to_string)
+        .unwrap_or_else(|| panic!("Item 2 with bounds: {o}"));
+    let at = line.split(" @").nth(1).unwrap().split(' ').next().unwrap();
+    let (x, y) = at.split_once(',').unwrap();
+    let (x, y): (i32, i32) = (x.parse().unwrap(), y.parse().unwrap());
+    let (bx, by) = tb.center("btnA");
+    let r = core
+        .call(
+            "drag",
+            json!({"from_x": bx, "from_y": by, "to_x": x, "to_y": y, "window": tb.window()}),
+        )
+        .await;
+    eprintln!("DG-01: {}", r["error"]["message"]);
+    assert_eq!(code(&r), "TARGET_OCCUPIED", "{r}");
+    assert!(
+        r["error"]["message"].as_str().unwrap().contains("Item 2"),
+        "{r}"
+    );
+    drop(tb);
+    core.stop().await;
+}
+
 // P2-LO-02: a virtualised Explorer row (never rendered) is found with deep: true, realised
 // only when used, and selected.
 #[tokio::test(flavor = "multi_thread")]

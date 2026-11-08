@@ -54,8 +54,14 @@ pub struct Builtin {
 pub const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "files.list",
-        args: "path, pattern?",
-        about: "folder contents (dirs end with /, sizes)",
+        args: "path, pattern?, sort?",
+        about: "folder contents (dirs end with /, sizes, modified); sort: name | newest",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "files.find",
+        args: "path, pattern, limit?",
+        about: "find files by name in a folder and its subfolders, newest first, with dates",
         class: Class::Observe,
     },
     Builtin {
@@ -302,7 +308,7 @@ pub fn plan(p: &Value) -> Result<Plan, ActError> {
     if let Some(b) = BUILTINS.iter().find(|b| b.name == name) {
         // Validate every path now: protected ones are refused before anything happens.
         let what = match b.name {
-            "files.list" | "files.open" | "files.mkdir" => {
+            "files.list" | "files.find" | "files.open" | "files.mkdir" => {
                 let x = checked(str_arg(&args, "path")?)?;
                 format!("{} {}", b.name, x.display())
             }
@@ -394,6 +400,7 @@ pub fn run(p: &Value, log: &mut dyn FnMut(crate::exec::StepLog)) -> Result<Value
     }
     match pl.name.as_str() {
         "files.list" => files_list(&args),
+        "files.find" => files_find(&args),
         "files.open" => files_open(&args),
         "files.mkdir" => {
             let d = checked(str_arg(&args, "path")?)?;
@@ -509,37 +516,133 @@ fn size(b: u64) -> String {
     }
 }
 
+/// Last-modified time as unix ms (0 if unknown).
+fn modified_ms(md: &std::fs::Metadata) -> u64 {
+    md.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// "YYYY-MM-DD HH:MM", local time.
+fn modified_text(ms: u64) -> String {
+    let t = crate::viewer::local_time(ms);
+    t.get(..16).unwrap_or(&t).to_string()
+}
+
 fn files_list(a: &Value) -> Result<Value, ActError> {
     let d = checked(str_arg(a, "path")?)?;
     let pat = a.get("pattern").and_then(Value::as_str).unwrap_or("*");
+    let newest = match a.get("sort").and_then(Value::as_str).unwrap_or("name") {
+        "name" => false,
+        "newest" => true,
+        s => return Err(bad(format!("sort must be name or newest, not '{s}'"))),
+    };
     let rd = std::fs::read_dir(&d).map_err(|e| bad(format!("{}: {e}", d.display())))?;
-    let mut rows: Vec<(bool, String, u64)> = rd
+    let mut rows: Vec<(bool, String, u64, u64)> = rd
         .flatten()
         .filter_map(|e| {
             let n = e.file_name().to_string_lossy().into_owned();
             let md = e.metadata().ok()?;
-            wildcard(pat, &n).then_some((md.is_dir(), n, md.len()))
+            wildcard(pat, &n).then_some((md.is_dir(), n, md.len(), modified_ms(&md)))
         })
         .collect();
-    rows.sort_by(|x, y| {
-        y.0.cmp(&x.0)
-            .then(x.1.to_lowercase().cmp(&y.1.to_lowercase()))
-    });
+    if newest {
+        rows.sort_by_key(|r| std::cmp::Reverse(r.3));
+    } else {
+        rows.sort_by(|x, y| {
+            y.0.cmp(&x.0)
+                .then(x.1.to_lowercase().cmp(&y.1.to_lowercase()))
+        });
+    }
     let total = rows.len();
     let lines: Vec<String> = rows
         .iter()
         .take(200)
-        .map(|(dir, n, s)| {
+        .map(|(dir, n, s, m)| {
             if *dir {
-                format!("{n}/")
+                format!("{n}/  {}", modified_text(*m))
             } else {
-                format!("{n}  {}", size(*s))
+                format!("{n}  {}  {}", size(*s), modified_text(*m))
             }
         })
         .collect();
     Ok(
         json!({"text": format!("{}\n{}\n-- {total} items{}", d.display(), lines.join("\n"),
         if total > 200 { " (first 200)" } else { "" }), "items": total}),
+    )
+}
+
+/// Files whose name matches `pattern` in `path` and its subfolders, newest first. Stays out of
+/// protected and hidden folders (AppData) and links, and stops after FIND_BUDGET.
+fn files_find(a: &Value) -> Result<Value, ActError> {
+    use std::os::windows::fs::MetadataExt;
+    const HIDDEN: u32 = 0x2;
+    const REPARSE: u32 = 0x400;
+    const FIND_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+    let root = checked(str_arg(a, "path")?)?;
+    let pat = str_arg(a, "pattern")?;
+    let limit = a
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(20)
+        .clamp(1, 100) as usize;
+    if !root.is_dir() {
+        return Err(bad(format!("{} is not a folder", root.display())));
+    }
+    let own = own_dirs();
+    let t0 = std::time::Instant::now();
+    // Breadth-first: Desktop, Downloads and Documents are scanned before deep project trees,
+    // so a budget cut loses the least likely places (live: depth-first spent 5 s in one tree).
+    let mut queue = std::collections::VecDeque::from([(root.clone(), 0)]);
+    let (mut hits, mut scanned, mut cut) = (Vec::new(), 0u64, false);
+    while let Some((dir, depth)) = queue.pop_front() {
+        if t0.elapsed() > FIND_BUDGET {
+            cut = true;
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            scanned += 1;
+            let Ok(md) = e.metadata() else { continue };
+            let attrs = md.file_attributes();
+            let path = e.path();
+            if md.is_dir() {
+                // Tool and app-data folders hold no user documents: .git, .cargo, node_modules,
+                // AppData (live: its Recent folder filled the results with .lnk shortcuts; it
+                // is not always marked hidden).
+                let name = e.file_name().to_string_lossy().to_lowercase();
+                if depth < 12
+                    && attrs & (HIDDEN | REPARSE) == 0
+                    && !name.starts_with('.')
+                    && name != "node_modules"
+                    && name != "appdata"
+                    && protected_reason(&path, &own).is_none()
+                {
+                    queue.push_back((path, depth + 1));
+                }
+            } else if wildcard(pat, &e.file_name().to_string_lossy()) {
+                hits.push((modified_ms(&md), md.len(), path));
+            }
+        }
+    }
+    hits.sort_by_key(|h| std::cmp::Reverse(h.0));
+    let total = hits.len();
+    let lines: Vec<String> = hits
+        .iter()
+        .take(limit)
+        .map(|(m, s, p)| format!("{}  {}  {}", modified_text(*m), size(*s), p.display()))
+        .collect();
+    let mut foot = format!("-- {total} match(es), newest first; {scanned} items scanned");
+    if cut {
+        foot.push_str("; time budget reached (search a smaller folder for the rest)");
+    }
+    Ok(
+        json!({"text": format!("{} \"{pat}\"\n{}\n{foot}", root.display(), lines.join("\n")),
+              "matches": total, "complete": !cut}),
     )
 }
 
@@ -963,6 +1066,50 @@ fn whatsapp_send(a: &Value) -> Result<Value, ActError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_is_recursive_newest_first_and_skips_hidden_folders() {
+        use std::os::windows::process::CommandExt;
+        let root = std::env::temp_dir().join(format!("xtraos-find-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let deep = root.join("a").join("b");
+        let hidden = root.join("hid");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::create_dir_all(&hidden).unwrap();
+        let t = |d: u64| std::time::SystemTime::now() - std::time::Duration::from_secs(d);
+        for (p, age) in [
+            (root.join("old_resume.pdf"), 3000),
+            (deep.join("new_resume.docx"), 10),
+            (root.join("notes.txt"), 5),
+            (hidden.join("secret_resume.pdf"), 1),
+        ] {
+            let f = std::fs::File::create(&p).unwrap();
+            f.set_modified(t(age)).unwrap();
+        }
+        // attrib +h (no extra crate): the hidden folder must not be searched.
+        std::process::Command::new("attrib")
+            .arg("+h")
+            .arg(&hidden)
+            .creation_flags(0x0800_0000)
+            .status()
+            .unwrap();
+        let r =
+            files_find(&json!({"path": root.to_string_lossy(), "pattern": "*resume*"})).unwrap();
+        let text = r["text"].as_str().unwrap();
+        assert_eq!(r["matches"], 2, "{text}");
+        let new = text.find("new_resume.docx").expect("deep file found");
+        let old = text.find("old_resume.pdf").expect("top file found");
+        assert!(new < old, "newest first: {text}");
+        assert!(
+            !text.contains("secret_resume"),
+            "hidden folder skipped: {text}"
+        );
+        let _ = std::process::Command::new("attrib")
+            .arg("-h")
+            .arg(&hidden)
+            .status();
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn wildcards() {

@@ -782,6 +782,30 @@ pub fn element_at(p: POINT) -> Option<(String, bool)> {
     }
 }
 
+/// The row-like item (ListItem, DataItem, TreeItem) under a screen point, if any: (role,
+/// name). `drag` uses it so nothing is dropped onto another item by accident: a file dropped
+/// on a folder icon moves into it, on the Recycle Bin it is deleted.
+pub fn item_at(p: POINT) -> Option<(&'static str, String)> {
+    let u = uia().ok()?;
+    unsafe {
+        let mut el =
+            u.a.ElementFromPoint(windows::Win32::Foundation::POINT { x: p.x, y: p.y })
+                .ok()?;
+        let walker = u.a.ControlViewWalker().ok()?;
+        for _ in 0..4 {
+            let role = role_name(el.CurrentControlType().map(|c| c.0).unwrap_or(0));
+            if ROW_ROLES.contains(&role) {
+                return Some((
+                    role,
+                    el.CurrentName().map(|b| b.to_string()).unwrap_or_default(),
+                ));
+            }
+            el = walker.GetParentElement(&el).ok()?;
+        }
+    }
+    None
+}
+
 /// True if the element with keyboard focus is a password field (typing there is denied).
 pub fn focused_is_password() -> bool {
     let Ok(u) = uia() else {

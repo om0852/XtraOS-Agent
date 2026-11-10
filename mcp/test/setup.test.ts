@@ -168,6 +168,24 @@ test('SU-12: Hermes Agent goes through `hermes mcp`; an existing entry is remove
   assert.deepEqual(calls.map((c) => c.slice(0, 3).join(' ')), ['hermes mcp remove', 'hermes mcp add']);
 });
 
+test('SU-14: Claude Code CLI off PATH is found at ~/.local/bin; a failure is not reported as Done', () => {
+  const d: Dirs = { ...tempDirs(), hasCommand: () => false };
+  const exe = path.join(d.home, '.local', 'bin', 'claude.exe');
+  mk(exe, '');
+  const c = byId(d, 'claude-code');
+  assert.equal(c.installed, true);
+  assert.equal(c.bin, `"${exe}"`);
+  const calls: string[] = [];
+  const fake = (bin: string, args: string[]) => { calls.push(`${bin} ${args.slice(0, 2).join(' ')}`); return { ok: true, out: '' }; };
+  assert.equal(run(['--apply', '--client', 'claude-code'], d, fake).code, 0);
+  assert.deepEqual(calls, [`"${exe}" mcp remove`, `"${exe}" mcp add`]);
+  // The CLI fails: exit 1 and no "Done".
+  const r = run(['--apply', '--client', 'claude-code'], d, () => ({ ok: false, out: 'boom' }));
+  assert.equal(r.code, 1);
+  assert.match(r.text, /FAILED: boom/);
+  assert.doesNotMatch(r.text, /\nDone\./);
+});
+
 test('SU-09: bad options are refused with exit code 2', () => {
   const d = tempDirs();
   assert.equal(run(['--client', 'nope'], d).code, 2);

@@ -62,6 +62,7 @@ files that exist. Exit code 0 when everything needed is in place, 1 otherwise.
 |---|---|---|
 | Codex CLI 0.163.0 | 2026-11-10 | `xtraos setup --apply --client codex` appended only the `[mcp_servers.xtraos]` table to `~/.codex/config.toml` (rest of the file byte-identical, backup equal to the original, second run "already configured"). `codex mcp list` / `codex mcp get xtraos` show it enabled over stdio. `codex exec` discovered the tools and started `xtraos/status`, then Codex itself refused the call: "MCP tool call requires approval, but approval policy is never" (non-interactive mode). A tool call approved in interactive `codex` is **still open**. |
 | Gemini CLI | 2026-11-10 | Not installed on the owner's PC (only Antigravity's `~/.gemini`); found the detection bug above. |
+| Claude Code | 2026-11-10 | First run FAILED: `claude` was not on PATH (the Claude desktop app runs Claude Code; the native CLI is `~/.local/bin/claude.exe`), and setup still printed "Done". Fixed: setup also looks in `~/.local/bin` (test SU-14) and reports failures instead of "Done". Second run: added; `claude mcp get xtraos` → Connected; doctor `[ok]`. |
 
 Other clients: not run live yet (P5-M9).
 

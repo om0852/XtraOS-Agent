@@ -43,7 +43,21 @@ export function serverEntry(tools?: string): Entry {
 }
 
 type Kind = 'mcpServers' | 'servers' | 'toml' | 'claude-cli' | 'hermes-cli';
-export type Client = { id: string; name: string; file: string; kind: Kind; installed: boolean };
+/** `bin`: how to run the client's own CLI (its name on PATH, or a quoted full path). */
+export type Client = { id: string; name: string; file: string; kind: Kind; installed: boolean; bin?: string };
+
+/**
+ * The client's CLI: on PATH, or (Claude Code) its native installer's place, ~/.local/bin, which
+ * is often not on PATH (found live: the Claude desktop app runs Claude Code without it).
+ */
+function cliBin(d: Dirs, name: string): string | undefined {
+  if (d.hasCommand?.(name)) return name;
+  if (name === 'claude') {
+    const native = path.join(d.home, '.local', 'bin', 'claude.exe');
+    if (fs.existsSync(native)) return `"${native}"`;
+  }
+  return undefined;
+}
 const isCli = (c: Client) => c.kind === 'claude-cli' || c.kind === 'hermes-cli';
 
 /**
@@ -54,8 +68,10 @@ const isCli = (c: Client) => c.kind === 'claude-cli' || c.kind === 'hermes-cli';
 export function clients(d: Dirs): Client[] {
   const app = (id: string, name: string, file: string, kind: Kind): Client =>
     ({ id, name, file, kind, installed: fs.existsSync(path.dirname(file)) });
-  const cli = (id: string, name: string, file: string, kind: Kind, bin: string): Client =>
-    ({ id, name, file, kind, installed: (d.hasCommand?.(bin) ?? false) || fs.existsSync(file) });
+  const cli = (id: string, name: string, file: string, kind: Kind, bin: string): Client => {
+    const found = cliBin(d, bin);
+    return { id, name, file, kind, installed: !!found || fs.existsSync(file), bin: found ?? bin };
+  };
   const code = path.join(d.appData, 'Code', 'User');
   // Hermes Agent keeps config.yaml under %LOCALAPPDATA%/hermes on native Windows, else ~/.hermes.
   const hermesNative = path.join(d.localAppData ?? path.join(d.home, 'AppData', 'Local'), 'hermes', 'config.yaml');
@@ -191,10 +207,11 @@ function backup(file: string): void {
 /** Writes (or with `entry = null` removes) the xtraos entry. Returns a one-line result. */
 export function write(client: Client, entry: Entry | null, run: RunCli = runCli): string {
   if (client.kind === 'claude-cli') {
-    run('claude', ['mcp', 'remove', '--scope', 'user', SERVER_NAME]); // absent is fine
+    const claude = client.bin ?? 'claude';
+    run(claude, ['mcp', 'remove', '--scope', 'user', SERVER_NAME]); // absent is fine
     if (!entry) return 'removed (claude mcp remove)';
     const env = entry.env ? Object.entries(entry.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]) : [];
-    const r = run('claude', ['mcp', 'add', '--scope', 'user', ...env, SERVER_NAME, '--', q(entry.command), q(entry.args[0])]);
+    const r = run(claude, ['mcp', 'add', '--scope', 'user', ...env, SERVER_NAME, '--', q(entry.command), q(entry.args[0])]);
     return r.ok ? 'added (claude mcp add)' : `FAILED: ${r.out || 'the claude command is not on PATH'}`;
   }
   if (client.kind === 'hermes-cli') {
@@ -202,12 +219,12 @@ export function write(client: Client, entry: Entry | null, run: RunCli = runCli)
     backup(client.file);
     const had = hermesState(readText(client.file) ?? '', entry ?? { command: '', args: [''] }) !== 'missing';
     if (had) {
-      const r = run('hermes', ['mcp', 'remove', SERVER_NAME]);
+      const r = run(client.bin ?? 'hermes', ['mcp', 'remove', SERVER_NAME]);
       if (!r.ok) return `FAILED: hermes mcp remove: ${r.out.slice(-300)}`;
     }
     if (!entry) return had ? 'removed (hermes mcp remove)' : 'no xtraos entry';
     const env = entry.env ? ['--env', ...Object.entries(entry.env).map(([k, v]) => `${k}=${v}`)] : [];
-    const r = run('hermes', ['mcp', 'add', SERVER_NAME, '--command', q(entry.command), ...env, '--args', q(entry.args[0])]);
+    const r = run(client.bin ?? 'hermes', ['mcp', 'add', SERVER_NAME, '--command', q(entry.command), ...env, '--args', q(entry.args[0])]);
     return r.ok ? 'added (hermes mcp add)' : `FAILED: ${r.out.slice(-300) || 'the hermes command is not on PATH'}`;
   }
   const text = readText(client.file) ?? '';
@@ -303,6 +320,7 @@ export function setup(argv: string[], d: Dirs = realDirs(), log: (s: string) => 
     log(`\nOpenClaw (not verified yet): add a stdio server with "openclaw mcp", command ${q(want.command)}, argument ${q(want.args[0])}.`);
   }
   if (pending) log(`\nNothing was changed. Run again with --apply to make ${pending} change(s). Restart the client afterwards.`);
+  else if (o.apply && failed) log(`\n${failed} change(s) FAILED (see above); nothing else was needed.`);
   else if (o.apply) log('\nDone. Restart the client (or reload its MCP servers) to see XtraOS.');
   return failed ? 1 : 0;
 }

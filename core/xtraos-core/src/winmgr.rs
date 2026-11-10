@@ -1008,6 +1008,9 @@ fn launch_app(p: &Value) -> Result<Value, ActError> {
     let timeout = opt_u64(p, "timeout_ms", 15_000, 60_000)?;
     // Reuse instead of opening the same thing twice (ADR 0028).
     let key = format!("{}|{}|{}", app.to_lowercase(), args, elevated);
+    // P6-M7 (ADR 0051): browsers ignore internal pages on the command line (they open a New
+    // Tab); open the browser without it and type the address into the address bar afterwards.
+    let (args, internal) = split_internal(&args);
     if p.get("reuse").and_then(Value::as_bool).unwrap_or(true) {
         if let Some(h) = reusable(&key) {
             focus(h);
@@ -1084,6 +1087,15 @@ fn launch_app(p: &Value) -> Result<Value, ActError> {
             mark_opened(h, &key);
             let mut d = describe(h, foreground_root());
             d["launched_pid"] = json!(pid);
+            if let Some(url) = &internal {
+                if is_browser(&process_name(pid_of(h))) {
+                    match open_internal(h, url) {
+                        Ok(()) => d["opened_internal"] = json!(url),
+                        Err(e) => d["internal_error"] = json!(format!("{}: {}", e.code, e.message)),
+                    }
+                    d["title"] = json!(title(h));
+                }
+            }
             return Ok(d);
         }
         if Instant::now() >= deadline {
@@ -1095,6 +1107,60 @@ fn launch_app(p: &Value) -> Result<Value, ActError> {
         }
         sleep(Duration::from_millis(100));
     }
+}
+
+const INTERNAL_SCHEMES: &[&str] = &[
+    "chrome://",
+    "edge://",
+    "brave://",
+    "vivaldi://",
+    "opera://",
+    // Not "about:": about:blank opens fine from the command line (win05 regression).
+];
+
+/// Removes the first internal browser page from a command line (pure):
+/// ("--new-window chrome://extensions", Some("chrome://extensions")) ← "--new-window chrome://extensions".
+pub fn split_internal(args: &str) -> (String, Option<String>) {
+    let mut found = None;
+    let rest: Vec<&str> = args
+        .split_whitespace()
+        .filter(|t| {
+            let t2 = t.trim_matches('"');
+            if found.is_none()
+                && INTERNAL_SCHEMES
+                    .iter()
+                    .any(|s| t2.to_lowercase().starts_with(s))
+            {
+                found = Some(t2.to_string());
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    match found {
+        Some(u) => (rest.join(" "), Some(u)),
+        None => (args.to_string(), None),
+    }
+}
+
+/// Chromium browsers (Ctrl+L focuses the address bar in every UI language).
+pub fn is_browser(process: &str) -> bool {
+    matches!(
+        process.to_lowercase().trim_end_matches(".exe"),
+        "chrome" | "msedge" | "brave" | "vivaldi" | "opera" | "chromium"
+    )
+}
+
+/// Types an internal page into a just-opened browser window's address bar (borrowing the
+/// window like `type` when it is not in front).
+fn open_internal(h: HWND, url: &str) -> Result<(), ActError> {
+    sleep(Duration::from_millis(700)); // the new window's address bar is ready
+    let w = window_ref(h);
+    crate::input::run("press_keys", &json!({"window": w, "keys": ["Ctrl+L"]}))?;
+    crate::input::run("type", &json!({"window": w, "text": url, "submit": true}))?;
+    sleep(Duration::from_millis(500));
+    Ok(())
 }
 
 /// Quotes one command-line argument per the MSVCRT rules (spaces, quotes, trailing backslashes).
@@ -1386,6 +1452,22 @@ mod tests {
         assert!(counts_as_dialog("SomeAppDialog", true)); // custom modal: owner disabled
         assert!(!counts_as_dialog("tooltips_class32", false));
         assert!(!counts_as_dialog("#32768", false)); // menu
+    }
+
+    // P6-M7 (ADR 0051): internal browser pages are typed, not passed on the command line.
+    #[test]
+    fn internal_pages_are_taken_out_of_the_command_line() {
+        assert_eq!(
+            split_internal("--new-window chrome://extensions"),
+            ("--new-window".to_string(), Some("chrome://extensions".to_string()))
+        );
+        assert_eq!(
+            split_internal("\"edge://settings\""),
+            (String::new(), Some("edge://settings".to_string()))
+        );
+        assert_eq!(split_internal("https://example.com"), ("https://example.com".to_string(), None));
+        assert_eq!(split_internal("--new-window about:blank").1, None, "about:blank works as an argument");
+        assert!(is_browser("chrome.exe") && is_browser("msedge") && !is_browser("notepad.exe"));
     }
 
     // P6-M1b (ADR 0046): the session failure: a handle reused by another app.

@@ -1791,11 +1791,33 @@ fn wait_for(p: &Value) -> Result<Value, ActError> {
                 .ok_or_else(|| bad("'idle_ms' must be 50..=60000"))?,
         )),
     };
-    if title.is_none() && text.is_none() && ref_gone.is_none() && !window_gone && idle.is_none() {
+    // P6-M7 (ADR 0051): `delay_ms` = a plain wait first; alone it is the whole call.
+    let delay = match p.get("delay_ms") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(Duration::from_millis(
+            v.as_u64()
+                .filter(|n| *n <= 60_000)
+                .ok_or_else(|| bad("'delay_ms' must be 0..=60000"))?,
+        )),
+    };
+    let no_conditions =
+        title.is_none() && text.is_none() && ref_gone.is_none() && !window_gone && idle.is_none();
+    if no_conditions && delay.is_none() {
         return Err(bad(
-            "give at least one condition: window_title, text_contains, ref_gone, window_gone, idle_ms",
+            "give delay_ms (a plain wait) or at least one condition: window_title, text_contains, ref_gone, window_gone, idle_ms",
         ));
     }
+    if let Some(d) = delay {
+        while t0.elapsed() < d {
+            crate::safety::check()?;
+            sleep((d - t0.elapsed()).min(Duration::from_millis(100)));
+        }
+        if no_conditions {
+            return Ok(json!({"met": ["delay"], "waited_ms": t0.elapsed().as_millis() as u64}));
+        }
+    }
+    // With a delay, the conditions' own timeout starts after it.
+    let t0 = Instant::now();
     // The window: given, or the foreground one for tree conditions (none needed for a title
     // search across windows or for ref_gone).
     let window: Option<HWND> = match p.get("window").filter(|v| !v.is_null()) {

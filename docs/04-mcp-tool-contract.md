@@ -59,7 +59,7 @@ case-insensitive, exact title first; one match is used, none is `WINDOW_NOT_FOUN
 |---|---|---|---|
 | `list_windows` | `filter?` (substring of title or process) | `w460650 chrome.exe "Google - Chrome" 0,0 1920x1040 focused` lines; `agent` = opened by the agent (P2-M4) | P1 (M3) |
 | `focus_window` | `window`, `verify_ms?` (default 300, 0 = off, max 2000) | `focused` true/false after `verify_ms`; when another window took the front: `taken_by` {ref, process, title} (else `NEEDS_HUMAN`) | P1 (M3); verify P6-M2 |
-| `launch_app` | `app` (name/path/AUMID or app-map service), `args?`, `elevated?`, `reuse?` (default true: same app+args still open from the agent → that window), `timeout_ms?` | ref of the new (or reused) window | P1 (M3; reuse P2-M4) |
+| `launch_app` | `app` (name/path/AUMID or app-map service), `args?`, `elevated?`, `reuse?` (default true: same app+args still open from the agent → that window), `timeout_ms?` | ref of the new (or reused) window. P6-M7 (ADR 0051): the first `chrome://`, `edge://`, `brave://`, `vivaldi://`, `opera://` page in `args` (not `about:` — `about:blank` works on the command line) of a Chromium browser is typed into the address bar (Ctrl+L, text, Enter; borrows like `type`) → `opened_internal`, else `internal_error` | P1 (M3; reuse P2-M4; P6-M7) |
 | `close_window` | `window`, `timeout_ms?` | ok (graceful WM_CLOSE; else `NEEDS_HUMAN`); a window the agent did not open asks the user first (P2-M4) | P1 (M3) |
 | (CLI) | `xtraos-core call <tool> [json \| -] [--json] [--out f.png]` | the same tools from any shell / LLM agent without MCP; pairs with the running core (starts it if needed); same policy, dialogs, kill switch, log | P3 (ADR 0039) |
 | `cleanup` | — | closes every still-open window the agent opened (only those); lists what is left | P2 (M4) |
@@ -106,8 +106,8 @@ Stop) every call returns `STOPPED` until the user resumes from the tray; there i
 
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
-| `wait_for` | `window?`, `window_title?`, `text_contains?`, `ref_gone?`, `window_gone?`, `idle_ms?`, `timeout_ms?` (default 10 s, max 120 s); all given conditions at once | met conditions (+ window ref) / `TIMEOUT` | P2 (M1; was P1, not built in Phase 1) |
-| `ask_human` | `message`, `kind` (confirm/choice/info/task), `options?` (choice: 2–5), `timeout_ms?` (default 120 s) | answer (`yes`/`no`/option/`ok`); `task` → `request_id` at once | P1 (M5) |
+| `wait_for` | `delay_ms?` (0–60,000; P6-M7: waited first; alone = a plain wait → `met: ["delay"]`), `window?`, `window_title?`, `text_contains?`, `ref_gone?`, `window_gone?`, `idle_ms?`, `timeout_ms?` (default 10 s, max 120 s, counted after the delay); all given conditions at once | met conditions (+ window ref) / `TIMEOUT` | P2 (M1; was P1, not built in Phase 1); P6-M7 |
+| `ask_human` | `message`, `kind` (confirm/choice/info/task/notify), `options?` (choice: 2–5), `timeout_ms?` (default 120 s) | answer (`yes`/`no`/option/`ok`); `task` → `request_id` at once; `notify` (P6-M7, ADR 0051): Windows notification from the tray icon, at once `{shown}`, at most 1 per 10 s (`throttled`) | P1 (M5); P6-M7 |
 | `wait_for_human` | `request_id`, `timeout_ms?` | `done` / `denied` (else `TIMEOUT`) | P1 (M5) |
 | `status` | — | running/stopped, paired client, kill hotkey, policy file (M5); `dialog`: the foreground window's owned dialog (or the foreground window when it is one) `{window, title, process, owner, blocking}` or `null` — Win32 dialogs only, in-page browser dialogs show in `observe` (P6-M4, ADR 0047); `health` {cpu_pct, ram_pct, warnings} (ADR 0050) | P1, P6-M4, ADR 0050 |
 

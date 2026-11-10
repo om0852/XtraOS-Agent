@@ -11,6 +11,29 @@ fn testbed_exe() -> String {
     common::testbed_exe().display().to_string()
 }
 
+/// Ends the testbeds this test launched even when an assertion fails (a failure left five
+/// always-on-top testbeds behind and broke the following suites).
+#[derive(Default)]
+struct EndLaunched(std::sync::Mutex<Vec<u64>>);
+
+impl EndLaunched {
+    fn add(&self, v: &serde_json::Value) {
+        if let Some(pid) = v["launched_pid"].as_u64().or_else(|| v["result"]["launched_pid"].as_u64()) {
+            self.0.lock().unwrap().push(pid);
+        }
+    }
+}
+
+impl Drop for EndLaunched {
+    fn drop(&mut self) {
+        for pid in self.0.lock().unwrap().iter() {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/F"])
+                .output();
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "interactive: opens the testbed 5 times; a brake prompt shows for 3 s"]
 async fn health01_readings_warning_and_brake() {
@@ -31,10 +54,13 @@ async fn health01_readings_warning_and_brake() {
 
     // 1st, 2nd window: quiet. 3rd: the result warns (2 already opened, limit 2).
     let launch = json!({"app": testbed_exe(), "args": ["300", "200"], "timeout_ms": 15000, "reuse": false});
+    let ended = EndLaunched::default();
     let a = core.ok("launch_app", launch.clone()).await;
+    ended.add(&a);
     assert!(a.get("health_warning").is_none(), "{a}");
-    core.ok("launch_app", launch.clone()).await;
+    ended.add(&core.ok("launch_app", launch.clone()).await);
     let c = core.ok("launch_app", launch.clone()).await;
+    ended.add(&c);
     let w = c["health_warning"].as_str().unwrap_or_default();
     assert!(w.contains("opened 3 windows"), "{c}");
     // Every tool result carries it, not only opening ones.
@@ -42,8 +68,9 @@ async fn health01_readings_warning_and_brake() {
     assert!(l["health_warning"].is_string(), "{l}");
 
     // 4 opened = critical: the 5th opening asks the user; unanswered → blocked.
-    core.ok("launch_app", launch.clone()).await;
+    ended.add(&core.ok("launch_app", launch.clone()).await);
     let e = core.call("launch_app", launch.clone()).await;
+    ended.add(&e);
     assert_eq!(code(&e), "BLOCKED_BY_POLICY", "{e}");
     assert!(e.to_string().contains("under strain"), "{e}");
 

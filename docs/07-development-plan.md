@@ -141,7 +141,12 @@ RAM, GPU, temperatures, disks, Wi-Fi signal, battery and the apps using most mem
 admin; a 5 s watchdog warns agents (`health_warning` on every result, `⚠` in MCP) and the user
 (banner) when the PC is under strain or the agent keeps opening windows/tabs; at a critical level
 opening more asks the user. File skills also refuse Windows' hidden system folders at drive roots.
-Interactive `health01` passes. Open: P6-M6 user-interrupt test (needs a human), work beside the user v2, P6-M7 `wait`/`notify`, P6-M8 large
+Interactive `health01` passes.
+**P6-M7 small tools: built** (ADR 0051) — `wait_for {delay_ms}` (plain wait), `ask_human
+{kind: "notify"}` (Windows notification, ≤ 1 per 10 s; also used for critical health warnings),
+`launch_app` opens `chrome://`/`edge://` pages through the address bar. The P6-M6 user-interrupt
+stop was seen live (USER_ACTIVE while the owner used the PC). Interactive `p6m7_e2e` passes.
+Open: work beside the user v2, P6-M7 `wait`/`notify`, P6-M8 large
 lists, P6-M9 open human-run gates.
 
 ## Working agreement

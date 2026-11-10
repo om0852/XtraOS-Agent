@@ -35,8 +35,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, RegisterHotKey, SetFocus, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_ESCAPE,
 };
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIIF_WARNING,
+    NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -102,6 +102,19 @@ struct Prompt {
     result: Option<usize>,
     /// Policy confirmations are cancelled by the kill switch; agent questions too.
     open: bool,
+    /// When it was opened: a non-safe answer in the first moment is ignored.
+    opened: Instant,
+}
+
+/// A prompt that pops up under a moving cursor can catch a click meant for something else
+/// (seen 2026-11-10 while the owner used the PC during a test). For this long after opening,
+/// only the safe answer counts.
+const PROMPT_ARM_MS: u128 = 800;
+
+/// Does a button press count? The safe answer always; another one only from real input and
+/// only after the prompt has been open PROMPT_ARM_MS (pure).
+pub fn answer_counts(i: usize, cancel: usize, open_ms: u128, hardware: bool) -> bool {
+    i == cancel || (hardware && open_ms >= PROMPT_ARM_MS)
 }
 
 fn err(code: &'static str, message: impl Into<String>, hint: &'static str) -> ActError {
@@ -913,6 +926,7 @@ fn open_prompt(
                 hwnd: 0,
                 result: None,
                 open: true,
+                opened: Instant::now(),
             },
         );
     post(WM_APP_PROMPT, id as usize);
@@ -1034,6 +1048,17 @@ fn ask_human(p: &Value) -> Result<Value, ActError> {
         return Err(bad("'message' is limited to 1000 characters"));
     }
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("confirm");
+    // P6-M7 (ADR 0051): a notification, no answer, returns at once; throttled.
+    if kind == "notify" {
+        let now = Instant::now();
+        let mut last = LAST_NOTIFY.lock().unwrap_or_else(|e| e.into_inner());
+        if !notify_allowed(*last, now) {
+            return Ok(json!({"shown": false, "throttled": true}));
+        }
+        *last = Some(now);
+        let shown = notify("XtraOS Agent", &perceive::clip(message, 250), false);
+        return Ok(json!({"shown": shown}));
+    }
     let options: Vec<String> = p
         .get("options")
         .and_then(Value::as_array)
@@ -1058,7 +1083,7 @@ fn ask_human(p: &Value) -> Result<Value, ActError> {
         "task" => (vec!["Done".into(), "I can't do this".into()], 1),
         k => {
             return Err(bad(format!(
-                "unknown kind '{k}' (confirm, choice, info, task)"
+                "unknown kind '{k}' (confirm, choice, info, task, notify)"
             )))
         }
     };
@@ -1226,6 +1251,31 @@ fn tray_data(msg: WHWND, tip: &str) -> NOTIFYICONDATAW {
     }
     nid
 }
+
+/// A Windows notification from the XtraOS tray icon (shown as a toast); returns at once
+/// (P6-M7, ADR 0051). False when the tray icon is not available.
+pub fn notify(title: &str, text: &str, warning: bool) -> bool {
+    let Some(u) = UI.get().filter(|u| u.ok) else {
+        return false;
+    };
+    let mut nid = tray_data(WHWND(u.msg as _), tray_tip());
+    nid.uFlags |= NIF_INFO;
+    nid.dwInfoFlags = if warning { NIIF_WARNING } else { NIIF_INFO };
+    for (i, c) in title.encode_utf16().take(nid.szInfoTitle.len() - 1).enumerate() {
+        nid.szInfoTitle[i] = c;
+    }
+    for (i, c) in text.encode_utf16().take(nid.szInfo.len() - 1).enumerate() {
+        nid.szInfo[i] = c;
+    }
+    unsafe { Shell_NotifyIconW(NIM_MODIFY, &nid) }.as_bool()
+}
+
+/// At most one agent notification per 10 s (a looping agent cannot flood the user). Pure.
+pub fn notify_allowed(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|t| now.duration_since(t) >= std::time::Duration::from_secs(10))
+}
+
+static LAST_NOTIFY: Mutex<Option<Instant>> = Mutex::new(None);
 
 static HELPER_MODE: AtomicBool = AtomicBool::new(false);
 
@@ -1818,14 +1868,22 @@ unsafe extern "system" fn prompt_proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM
                 .unwrap_or_else(|e| e.into_inner())
                 .as_ref()
                 .and_then(|m| m.get(&id))
-                .map(|p| (p.cancel, p.buttons.len()));
-            if let Some((cancel, n)) = cancel {
+                .map(|p| (p.cancel, p.buttons.len(), p.opened.elapsed().as_millis()));
+            if let Some((cancel, n, open_ms)) = cancel {
                 let i = ctl - PROMPT_BUTTON_BASE;
                 if (0..n as i32).contains(&i) {
                     // Only the safe answer may come from anywhere; any other answer must come
                     // from the user's real mouse/keyboard, never from another program's
-                    // BM_CLICK / WM_COMMAND / SendInput (ADR 0041).
-                    if i as usize != cancel && !from_hardware_input(WHWND(lp.0 as _)) {
+                    // BM_CLICK / WM_COMMAND / SendInput (ADR 0041), and not in the first
+                    // moment after the prompt appeared (a stray click, ADR 0050).
+                    if i as usize != cancel
+                        && !answer_counts(
+                            i as usize,
+                            cancel,
+                            open_ms,
+                            from_hardware_input(WHWND(lp.0 as _)),
+                        )
+                    {
                         return LRESULT(0);
                     }
                     answer(id, i as usize);
@@ -1863,6 +1921,24 @@ mod tests {
     fn stop_flag_round_trip() {
         // Pure flag behaviour (no UI needed).
         assert!(check().is_ok() || stopped());
+    }
+
+    // A stray click right after a prompt appears never approves anything.
+    #[test]
+    fn early_or_synthetic_approvals_do_not_count() {
+        assert!(answer_counts(1, 1, 0, false), "the safe answer always counts");
+        assert!(!answer_counts(0, 1, 100, true), "too early");
+        assert!(!answer_counts(0, 1, 5_000, false), "not from real input");
+        assert!(answer_counts(0, 1, 900, true));
+    }
+
+    // P6-M7 (ADR 0051): a looping agent cannot flood the user with notifications.
+    #[test]
+    fn notifications_are_throttled() {
+        let t = Instant::now();
+        assert!(notify_allowed(None, t));
+        assert!(!notify_allowed(Some(t), t + std::time::Duration::from_secs(9)));
+        assert!(notify_allowed(Some(t), t + std::time::Duration::from_secs(10)));
     }
 
     #[test]

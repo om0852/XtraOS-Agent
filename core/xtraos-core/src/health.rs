@@ -548,6 +548,19 @@ pub fn ensure_watchdog() {
                         crate::safety::activity(&format!("⚠ {}", w.text));
                         crate::safety::activity_end();
                     }
+                    // A critical warning also as a Windows notification, at most every 10 min.
+                    let toast = w.critical
+                        && with_state(|s| {
+                            let k = format!("toast:{}", w.key);
+                            let due = s.shown.get(&k).is_none_or(|t| t.elapsed() >= Duration::from_secs(600));
+                            if due {
+                                s.shown.insert(k, Instant::now());
+                            }
+                            due
+                        });
+                    if toast {
+                        crate::safety::notify("XtraOS — the PC is under strain", &w.text, true);
+                    }
                 }
                 sleep(Duration::from_secs(5));
             }

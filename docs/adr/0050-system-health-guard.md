@@ -83,6 +83,12 @@ not below it.
   line); `status` shows CPU/RAM, the dialog line (P6-M4, until now only in JSON) and warnings.
 - Test-only environment overrides: `XTRAOS_HEALTH_OPENED_WARN/CRIT`, `XTRAOS_HEALTH_GROWTH_WARN/CRIT`
   and `XTRAOS_HEALTH_PROMPT_MS` (how long the prompt waits; nothing can answer it for the user).
+- **All XtraOS prompts:** an answer other than the safe one (e.g. "Allow") now counts only
+  after the prompt has been open 0.8 s (`safety::answer_counts`), on top of the existing
+  real-input rule (ADR 0041), so a click aimed at something else cannot approve a prompt that
+  just popped up under the cursor. During the regression runs the brake prompt was answered
+  "Allow" by a real mouse click several times while the owner used the PC; unanswered runs
+  blocked as designed.
 - Live run on the owner's PC: CPU 14 %, RAM 11.5/15.8 GB, GPU 6 %, Wi-Fi 83 %, battery 100 %
   plugged in, cpu zone 79 °C, C: 61 of 475 GB free, top memory Firefox ×13 1.9 GB.
 

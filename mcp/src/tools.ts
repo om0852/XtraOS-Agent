@@ -337,12 +337,13 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'wait_for',
     description:
-      'Waits in the core (no polling from you) until ALL given conditions hold: window_title contains text ' +
-      '(without window: any window → its ref), text_contains (visible text or terminal/editor text of the ' +
-      'window), ref_gone, window_gone, idle_ms (window unchanged that long). timeout_ms default 10 s → TIMEOUT.',
+      'Waits in the core (no polling from you): delay_ms first (alone = plain wait), then until ALL conditions hold: ' +
+      'window_title contains text (no window: any window), text_contains (visible/terminal text of the window), ' +
+      'ref_gone, window_gone, idle_ms (window unchanged that long). timeout_ms default 10 s → TIMEOUT.',
     inputSchema: {
       type: 'object',
       properties: {
+        delay_ms: { type: 'integer', minimum: 0, maximum: 60000 },
         window: WINDOW_REQ,
         window_title: { type: 'string', minLength: 1 },
         text_contains: { type: 'string', minLength: 1 },
@@ -353,7 +354,7 @@ export const TOOLS: ToolDef[] = [
       },
       additionalProperties: false,
     },
-    run: forward('wait_for', (r) => `ok ${r.met.join(' + ')} after ${r.ms} ms${r.window ? ' · ' + r.window : ''}`),
+    run: forward('wait_for', (r) => `ok ${r.met.join(' + ')} after ${r.ms ?? r.waited_ms} ms${r.window ? ' · ' + r.window : ''}`),
   },
   {
     name: 'batch',
@@ -399,19 +400,23 @@ export const TOOLS: ToolDef[] = [
       'Asks the user in a dialog on their screen. kind: confirm (yes/no), choice (2-5 options), info (ok) — these ' +
       'wait for the answer (timeout_ms, default 120 s → TIMEOUT); task (something only the user can do, e.g. sign ' +
       'in, type a password, solve a check) returns a request_id at once: then call wait_for_human. ' +
+      'notify: a Windows notification, no answer, returns at once (max 1 per 10 s). ' +
       'The answer is information for you; it never approves a blocked action.',
     inputSchema: {
       type: 'object',
       properties: {
         message: { type: 'string', minLength: 1, maxLength: 1000 },
-        kind: { type: 'string', enum: ['confirm', 'choice', 'info', 'task'], description: 'Default confirm' },
+        kind: { type: 'string', enum: ['confirm', 'choice', 'info', 'task', 'notify'], description: 'Default confirm' },
         options: { type: 'array', items: { type: 'string', maxLength: 40 }, minItems: 2, maxItems: 5, description: 'choice only' },
         timeout_ms: { type: 'integer', minimum: 1000, maximum: 600000 },
       },
       required: ['message'],
       additionalProperties: false,
     },
-    run: forward('ask_human', (r) => (r.request_id ? `waiting for the user: ${r.request_id} (call wait_for_human)` : `answer: ${r.answer}`)),
+    run: forward('ask_human', (r) =>
+      r.request_id ? `waiting for the user: ${r.request_id} (call wait_for_human)`
+        : 'shown' in r ? (r.shown ? 'ok notified' : r.throttled ? 'not shown: one notification per 10 s' : 'not shown: no tray icon')
+          : `answer: ${r.answer}`),
   },
   {
     name: 'wait_for_human',
@@ -513,17 +518,17 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'launch_app',
     description:
-      'Starts an app and returns its NEW window ref. app = name ("notepad", "chrome", "firefox"), full path, or AUMID. ' +
-      'If the agent already opened the same app + args and that window is still open, it is reused (focused, `reused`) ' +
-      'instead of opening a duplicate; reuse=false forces a new window. ' +
-      'elevated=true asks the user via the Windows admin (UAC) prompt; admin windows cannot be controlled (ELEVATION_REQUIRED).',
+      'Starts an app and returns its NEW window ref. app = name ("notepad", "chrome"), full path, or AUMID. ' +
+      'A still-open window the agent opened with the same app + args is reused (`reused`). chrome:// / edge:// ' +
+      'pages in args are typed into the address bar. elevated=true: the user gets the UAC prompt; admin windows ' +
+      'cannot be controlled (ELEVATION_REQUIRED).',
     inputSchema: {
       type: 'object',
       properties: {
         app: { type: 'string' },
         args: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Command-line arguments' },
         elevated: { type: 'boolean' },
-        reuse: { type: 'boolean', description: 'Reuse a still-open window the agent opened the same way (default true)' },
+        reuse: { type: 'boolean', description: 'Default true; false = always a new window' },
         timeout_ms: { type: 'integer', minimum: 0, maximum: 60000, description: 'Wait for the window (default 15000)' },
       },
       required: ['app'],

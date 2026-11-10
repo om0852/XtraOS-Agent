@@ -42,8 +42,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   // P6-M3 (ADR 0046): name what the tool does accept.
   if (extra.length) return errorResult('INVALID_ARGS', `unexpected argument(s): ${extra.join(', ')}`, `'${tool.name}' accepts: ${Object.keys(tool.inputSchema.properties).join(', ') || '(no arguments)'}.`);
   try {
+    core.healthWarning = null;
     const out = await tool.run(core, args);
-    return { content: typeof out === 'string' ? [{ type: 'text' as const, text: out }] : out };
+    const content = typeof out === 'string' ? [{ type: 'text' as const, text: out }] : out;
+    // ADR 0050: every result says when the PC is under strain.
+    if (core.healthWarning) content.push({ type: 'text' as const, text: `⚠ ${core.healthWarning}` });
+    return { content };
   } catch (e) {
     if (e instanceof CoreError) return errorResult(e.code, e.message, e.hint);
     return errorResult('INTERNAL', e instanceof Error ? e.message : String(e), '');

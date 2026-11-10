@@ -71,8 +71,15 @@ export class CoreClient {
     // A call may legitimately take up to its own timeout_ms (waiting for the user to be idle,
     // waiting for a launched window); allow that plus a margin.
     const t = typeof params?.timeout_ms === 'number' ? params.timeout_ms + 5_000 : 0;
-    return this.send(method, params, Math.max(this.timeoutMs, t));
+    const r = await this.send(method, params, Math.max(this.timeoutMs, t));
+    // ADR 0050: the core adds `health_warning` while the PC is under strain.
+    const w = (r as { health_warning?: unknown } | null)?.health_warning;
+    if (typeof w === 'string') this.healthWarning = w;
+    return r;
   }
+
+  /** The last health warning the core sent during the current tool call (ADR 0050). */
+  healthWarning: string | null = null;
 
   close(): void {
     this.sock?.destroy();

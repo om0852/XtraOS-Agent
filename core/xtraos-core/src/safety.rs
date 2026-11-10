@@ -745,6 +745,8 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
             ))
         }
     }
+    // ADR 0050: while the PC is under strain, opening more asks the user first.
+    crate::health::brake(method, p)?;
     // Skills: a macro runs as a batch (each step authorised); a built-in skill is checked
     // with its own class and description (protected paths refused in plan()).
     let skill = if method == "run_skill" {

@@ -201,6 +201,26 @@ pub fn protected_reason(p: &Path, own: &[PathBuf]) -> Option<String> {
     if s.len() <= 3 {
         return Some("drive roots".into());
     }
+    // ADR 0050: Windows' hidden system folders and files at the root of any drive.
+    if s.as_bytes().get(1) == Some(&b':') && s.as_bytes().get(2) == Some(&b'\\') {
+        let first = s[3..].split('\\').next().unwrap_or("");
+        if matches!(
+            first,
+            "$recycle.bin"
+                | "system volume information"
+                | "recovery"
+                | "boot"
+                | "efi"
+                | "pagefile.sys"
+                | "hiberfil.sys"
+                | "swapfile.sys"
+                | "$windows.~bt"
+                | "$windows.~ws"
+                | "$winreagent"
+        ) {
+            return Some("Windows system files at the drive root".into());
+        }
+    }
     let env = |k: &str| std::env::var(k).ok().map(|v| lower(Path::new(&v)));
     let under = |root: &str| s == root || s.starts_with(&format!("{root}\\"));
     for (k, why) in [
@@ -1145,6 +1165,17 @@ mod tests {
             std::env::var("USERPROFILE").unwrap_or(r"C:\Users\me".into())
         ));
         assert!(protected_reason(&sneaky.unwrap(), &own).is_some());
+        // ADR 0050: hidden system folders/files at any drive root
+        for p in [
+            r"C:\$Recycle.Bin\S-1-5\x",
+            r"D:\System Volume Information\y",
+            r"C:\pagefile.sys",
+            r"C:\Recovery\WindowsRE",
+            r"E:\EFI\Microsoft\Boot\bcd",
+        ] {
+            assert!(protected_reason(Path::new(p), &own).is_some(), "{p}");
+        }
+        assert!(protected_reason(Path::new(r"D:\Projects\boot-camp\notes.txt"), &own).is_none());
     }
 
     #[test]

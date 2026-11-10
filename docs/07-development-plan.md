@@ -130,7 +130,18 @@ message box; Edge alert with `XTRAOS_TEST_BROWSERS=1`) passes.
 **P6-M5 browser/Electron page content: built** (ADR 0048) — the first read of a Chrome, Edge or
 Electron window waits (≤ 1.5 s) for its page instead of returning only the browser frame;
 `observe {reveal:true}` reads a minimized one without a focus change; `page` says why a page is
-missing. Interactive `p6m5_e2e` (Edge + Chrome) passes. Open: P6-M6 work beside the user v2, P6-M7 `wait`/`notify`, P6-M8 large
+missing. Interactive `p6m5_e2e` (Edge + Chrome) passes.
+**P6-M6 work beside the user: built** (ADR 0049) — `type`, `press_keys` and real clicks borrow a
+window that is not in front once the user is idle 1.5 s, then give the user's window back (on by
+default, owner decision); `type {ref, text}`; `set_value` on a drop-down selects the option;
+a plain clickable web `<div>` is clicked through its parent. Interactive `p6m6_e2e` (a form behind
+the testbed, Edge + Chrome) passes.
+**System health guard: built** (ADR 0050, owner request) — `system {op: "health"}` reads CPU,
+RAM, GPU, temperatures, disks, Wi-Fi signal, battery and the apps using most memory without
+admin; a 5 s watchdog warns agents (`health_warning` on every result, `⚠` in MCP) and the user
+(banner) when the PC is under strain or the agent keeps opening windows/tabs; at a critical level
+opening more asks the user. File skills also refuse Windows' hidden system folders at drive roots.
+Interactive `health01` passes. Open: P6-M6 user-interrupt test (needs a human), work beside the user v2, P6-M7 `wait`/`notify`, P6-M8 large
 lists, P6-M9 open human-run gates.
 
 ## Working agreement

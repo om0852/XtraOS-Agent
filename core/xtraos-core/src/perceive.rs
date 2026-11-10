@@ -978,6 +978,19 @@ pub fn resolve(v: &Value) -> Result<Target, ActError> {
     })
 }
 
+/// The ref's element is a password field (typing there is denied).
+pub fn is_password(t: &Target) -> bool {
+    t.password
+        || unsafe { t.el.0.CurrentIsPassword() }
+            .map(|b| b.as_bool())
+            .unwrap_or(false)
+}
+
+/// Keyboard focus to the ref's element (`type {ref}`, P6-M6). The window is already in front.
+pub fn focus_element(t: &Target) -> Result<(), ActError> {
+    unsafe { t.el.0.SetFocus() }.map_err(|e| com_err("focusing the field", e))
+}
+
 impl Target {
     pub fn center(&self) -> Result<POINT, ActError> {
         let r = unsafe { self.el.0.CurrentBoundingRectangle() }
@@ -1957,6 +1970,63 @@ fn keep_foreground<T>(
     Ok((out, restored))
 }
 
+/// The background ways to click one element, in order. Ok(None) = none fits.
+unsafe fn click_patterns(
+    el: &IUIAutomationElement,
+    row: bool,
+) -> Result<Option<&'static str>, ActError> {
+    if row {
+        if let Ok(p) =
+            el.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
+        {
+            p.Select().map_err(|e| com_err("select", e))?;
+            return Ok(Some("select"));
+        }
+    }
+    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) {
+        p.Invoke().map_err(|e| com_err("invoke", e))?;
+        return Ok(Some("invoke"));
+    }
+    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId) {
+        p.Toggle().map_err(|e| com_err("toggle", e))?;
+        return Ok(Some("toggle"));
+    }
+    if let Ok(p) =
+        el.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
+    {
+        p.Select().map_err(|e| com_err("select", e))?;
+        return Ok(Some("select"));
+    }
+    if let Ok(p) =
+        el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId)
+    {
+        let state = p.CurrentExpandCollapseState().map(|s| s.0).unwrap_or(0);
+        if state == 3 {
+            // leaf: nothing to do here, fall through to the next option
+        } else if state == 0 {
+            p.Expand().map_err(|e| com_err("expand", e))?;
+            return Ok(Some("expand"));
+        } else {
+            p.Collapse().map_err(|e| com_err("collapse", e))?;
+            return Ok(Some("collapse"));
+        }
+    }
+    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+        UIA_LegacyIAccessiblePatternId,
+    ) {
+        let action = p
+            .CurrentDefaultAction()
+            .map(|b| b.to_string())
+            .unwrap_or_default();
+        if !action.is_empty() {
+            p.DoDefaultAction()
+                .map_err(|e| com_err("default action", e))?;
+            return Ok(Some("default_action"));
+        }
+    }
+    Ok(None)
+}
+
 /// `click(ref)` in the background. Ok(None) = no pattern fits (caller uses real input).
 pub fn click_background(t: &Target) -> Result<Option<Value>, ActError> {
     if !t.enabled() {
@@ -1978,52 +2048,30 @@ pub fn click_background(t: &Target) -> Result<Option<Value>, ActError> {
             || x == UIA_TreeItemControlTypeId.0
     );
     let res = keep_foreground(t.window, || unsafe {
-        if row {
-            if let Some(p) =
-                t.pattern::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
+        if let Some(how) = click_patterns(&t.el.0, row)? {
+            return Ok(Some(how));
+        }
+        // P6-M6 (ADR 0049): a web page's clickable <div> shows up as its Text; the click
+        // handler sits on the parent (a Group with Invoke). Try the direct parent once.
+        if matches!(role_name(ct), "Text" | "Image") {
+            let u = uia()?;
+            if let Ok(parent) = u
+                .a
+                .ControlViewWalker()
+                .and_then(|w| w.GetParentElement(&t.el.0))
             {
-                p.Select().map_err(|e| com_err("select", e))?;
-                return Ok(Some("select"));
-            }
-        }
-        if let Some(p) = t.pattern::<IUIAutomationInvokePattern>(UIA_InvokePatternId) {
-            p.Invoke().map_err(|e| com_err("invoke", e))?;
-            return Ok(Some("invoke"));
-        }
-        if let Some(p) = t.pattern::<IUIAutomationTogglePattern>(UIA_TogglePatternId) {
-            p.Toggle().map_err(|e| com_err("toggle", e))?;
-            return Ok(Some("toggle"));
-        }
-        if let Some(p) = t.pattern::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
-        {
-            p.Select().map_err(|e| com_err("select", e))?;
-            return Ok(Some("select"));
-        }
-        if let Some(p) =
-            t.pattern::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId)
-        {
-            let state = p.CurrentExpandCollapseState().map(|s| s.0).unwrap_or(0);
-            if state == 3 {
-                // leaf: nothing to do here, fall through to the next option
-            } else if state == 0 {
-                p.Expand().map_err(|e| com_err("expand", e))?;
-                return Ok(Some("expand"));
-            } else {
-                p.Collapse().map_err(|e| com_err("collapse", e))?;
-                return Ok(Some("collapse"));
-            }
-        }
-        if let Some(p) =
-            t.pattern::<IUIAutomationLegacyIAccessiblePattern>(UIA_LegacyIAccessiblePatternId)
-        {
-            let action = p
-                .CurrentDefaultAction()
-                .map(|b| b.to_string())
-                .unwrap_or_default();
-            if !action.is_empty() {
-                p.DoDefaultAction()
-                    .map_err(|e| com_err("default action", e))?;
-                return Ok(Some("default_action"));
+                let prole = role_name(parent.CurrentControlType().map(|c| c.0).unwrap_or(0));
+                if matches!(prole, "Group" | "Custom" | "Pane" | "ListItem" | "DataItem") {
+                    if let Some(how) = click_patterns(&parent, false)? {
+                        return Ok(Some(match how {
+                            "invoke" => "parent_invoke",
+                            "default_action" => "parent_default_action",
+                            "toggle" => "parent_toggle",
+                            "select" => "parent_select",
+                            _ => "parent",
+                        }));
+                    }
+                }
             }
         }
         Ok(None)
@@ -2103,6 +2151,14 @@ fn set_value(p: &Value) -> Result<Value, ActError> {
             "Wait until it is enabled.",
         ));
     }
+    let role = role_name(unsafe { t.el.0.CurrentControlType() }.map(|c| c.0).unwrap_or(0));
+    // P6-M6 (ADR 0049): a drop-down (HTML <select>, desktop combo) takes its value by
+    // selecting the option: writing the value text was "ok" but changed nothing on web pages.
+    if role == "ComboBox" {
+        if let Some(v) = set_combo(&t, value)? {
+            return Ok(v);
+        }
+    }
     let (via, restored) = keep_foreground(t.window, || unsafe {
         if let Some(vp) = t.pattern::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
             if vp.CurrentIsReadOnly().map(|b| b.as_bool()).unwrap_or(false) {
@@ -2130,9 +2186,240 @@ fn set_value(p: &Value) -> Result<Value, ActError> {
             "Use click(ref) then type instead.",
         ))
     })?;
-    Ok(
-        json!({"mode": "background", "via": via, "chars": value.chars().count(), "foreground_restored": restored}),
-    )
+    let mut out = json!({"mode": "background", "via": via, "chars": value.chars().count(), "foreground_restored": restored});
+    // A browser's rich-text editor takes the text but its page code is not told (no input
+    // event); UIA cannot tell it from a plain <input>, so say so for every browser field.
+    if role == "Edit" && winmgr::is_chromium(t.window) {
+        out["note"] = json!("in a browser, rich-text editors may not notice set_value; if the page does not react, use type {ref, text}");
+    }
+    Ok(out)
+}
+
+/// Which option matches `value`: exact name first, then trimmed and case-insensitive (pure).
+pub fn match_option(options: &[String], value: &str) -> Option<usize> {
+    options.iter().position(|o| o == value).or_else(|| {
+        let v = value.trim().to_lowercase();
+        options.iter().position(|o| o.trim().to_lowercase() == v)
+    })
+}
+
+/// The option elements (ListItem descendants) of a drop-down, with their names.
+fn combo_options(el: &IUIAutomationElement) -> Result<Vec<(String, IUIAutomationElement)>, ActError> {
+    let u = uia()?;
+    let mut out = Vec::new();
+    unsafe {
+        let all_cond = u
+            .a
+            .CreateTrueCondition()
+            .map_err(|e| com_err("CreateTrueCondition", e))?;
+        // Walk the raw view (FindAll missed Chromium's open <select> list: combo > List >
+        // ListItem, measured 2026-11-10). Depth ≤ 3, ≤ 500 options.
+        if let Ok(walker) = u.a.RawViewWalker() {
+            let mut stack: Vec<(IUIAutomationElement, u32)> = Vec::new();
+            if let Ok(c) = walker.GetFirstChildElement(el) {
+                stack.push((c, 1));
+            }
+            while let Some((o, depth)) = stack.pop() {
+                if out.len() >= 500 {
+                    break;
+                }
+                if let Ok(next) = walker.GetNextSiblingElement(&o) {
+                    stack.push((next, depth));
+                }
+                if o.CurrentControlType().map(|c| c.0).unwrap_or(0) == UIA_ListItemControlTypeId.0
+                {
+                    let name = o.CurrentName().map(|b| b.to_string()).unwrap_or_default();
+                    out.push((name, o));
+                } else if depth < 3 {
+                    if let Ok(c) = walker.GetFirstChildElement(&o) {
+                        stack.push((c, depth + 1));
+                    }
+                }
+            }
+        }
+        // Chromium's <select>: the options are not under the combo element; the selected
+        // option is reachable through SelectionPattern, and its list holds all of them.
+        if out.is_empty() {
+            if let Ok(sp) =
+                el.GetCurrentPatternAs::<IUIAutomationSelectionPattern>(UIA_SelectionPatternId)
+            {
+                if let Some(list) = sp
+                    .GetCurrentSelection()
+                    .ok()
+                    .and_then(|s| s.GetElement(0).ok())
+                    .and_then(|sel| {
+                        u.a.RawViewWalker()
+                            .ok()
+                            .and_then(|w| w.GetParentElement(&sel).ok())
+                    })
+                {
+                    if let Ok(kids) = list.FindAll(TreeScope_Children, &all_cond) {
+                        for i in 0..kids.Length().unwrap_or(0).min(500) {
+                            let Ok(o) = kids.GetElement(i) else { continue };
+                            if o.CurrentControlType().map(|c| c.0).unwrap_or(0)
+                                == UIA_ListItemControlTypeId.0
+                            {
+                                let name =
+                                    o.CurrentName().map(|b| b.to_string()).unwrap_or_default();
+                                out.push((name, o));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The drop-down's shown value: ValuePattern, else the selected option's name.
+fn combo_value(el: &IUIAutomationElement) -> String {
+    unsafe {
+        if let Ok(vp) = el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
+            if let Ok(v) = vp.CurrentValue() {
+                return v.to_string();
+            }
+        }
+        if let Ok(sp) = el.GetCurrentPatternAs::<IUIAutomationSelectionPattern>(UIA_SelectionPatternId) {
+            if let Ok(sel) = sp.GetCurrentSelection() {
+                if let Ok(first) = sel.GetElement(0) {
+                    return first.CurrentName().map(|b| b.to_string()).unwrap_or_default();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// set_value on a ComboBox: select the matching option (expanding the list if needed), then
+/// check the shown value. Ok(None): an editable combo whose text is not an option (the caller
+/// writes the text instead).
+fn set_combo(t: &Target, value: &str) -> Result<Option<Value>, ActError> {
+    let el = &t.el.0;
+    let ec = unsafe {
+        el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId)
+    }
+    .ok();
+    // Desktop combos list their options while closed; Chromium's <select> only while open,
+    // and opening it activates the browser (its popup takes the keyboard). So: wait until
+    // the user is idle (a key pressed now would land in the list), then open, select, close
+    // and read back inside ONE foreground hold — giving the foreground back earlier closes
+    // the popup and the options vanish (measured 2026-11-10).
+    let need_open = combo_options(el)?.is_empty() && ec.is_some();
+    if need_open {
+        crate::input::wait_user_idle(&crate::input::Polite {
+            idle_ms: 1_500,
+            timeout_ms: 30_000,
+            restore_cursor: false,
+        })?;
+    }
+    enum Done {
+        Selected(String, String),
+        NoMatch(Vec<String>),
+    }
+    let (done, _) = keep_foreground(t.window, || unsafe {
+        let mut opened = false;
+        let mut opts = combo_options(el)?;
+        if opts.is_empty() {
+            if let Some(p) = &ec {
+                p.Expand().map_err(|e| com_err("expand", e))?;
+                opened = true;
+                let t0 = Instant::now();
+                while opts.is_empty() && t0.elapsed() < Duration::from_millis(1500) {
+                    sleep(Duration::from_millis(100));
+                    opts = combo_options(el)?;
+                }
+            }
+        }
+        let close = |opened: bool| {
+            if opened {
+                if let Some(p) = &ec {
+                    if p.CurrentExpandCollapseState().map(|s| s.0).unwrap_or(0) != 0 {
+                        let _ = p.Collapse();
+                    }
+                }
+            }
+        };
+        let names: Vec<String> = opts.iter().map(|(n, _)| n.clone()).collect();
+        let Some(i) = match_option(&names, value) else {
+            close(opened);
+            return Ok(Done::NoMatch(names));
+        };
+        let pick = |o: &IUIAutomationElement| -> Result<(), ActError> {
+            o.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
+                .map_err(|e| com_err("the option cannot be selected", e))?
+                .Select()
+                .map_err(|e| com_err("select", e))
+        };
+        let name = names[i].clone();
+        pick(&opts[i].1)?;
+        sleep(Duration::from_millis(150));
+        // Some lists only commit a selection made while they are open.
+        if combo_value(el) != name && !opened {
+            if let Some(p) = &ec {
+                p.Expand().map_err(|e| com_err("expand", e))?;
+                opened = true;
+                sleep(Duration::from_millis(300));
+                if let Some((_, o)) = combo_options(el)?.iter().find(|(n, _)| *n == name) {
+                    pick(o)?;
+                    sleep(Duration::from_millis(150));
+                }
+            }
+        }
+        close(opened);
+        sleep(Duration::from_millis(100));
+        Ok(Done::Selected(name, combo_value(el)))
+    })?;
+    let names = match done {
+        Done::Selected(name, shown) => {
+            if shown != name {
+                return Err(err(
+                    "NEEDS_HUMAN",
+                    format!(
+                        "selected \"{}\" but the drop-down still shows \"{}\"",
+                        clip(&name, 60),
+                        clip(&shown, 60)
+                    ),
+                    "Try click(ref) on the drop-down, then click the option; else ask the user.",
+                ));
+            }
+            return Ok(Some(
+                json!({"mode": "background", "via": "select_option", "option": name}),
+            ));
+        }
+        Done::NoMatch(names) => names,
+    };
+    {
+        let editable = unsafe {
+            let u = uia()?;
+            let cond = u.a.CreateTrueCondition().map_err(|e| com_err("cond", e))?;
+            el.FindAll(TreeScope_Children, &cond)
+                .ok()
+                .map(|kids| {
+                    (0..kids.Length().unwrap_or(0)).any(|k| {
+                        kids.GetElement(k)
+                            .and_then(|c| c.CurrentControlType())
+                            .map(|c| c.0 == UIA_EditControlTypeId.0)
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        };
+        if editable || names.is_empty() {
+            return Ok(None);
+        }
+        let list: Vec<String> = names.iter().take(20).map(|n| format!("\"{}\"", clip(n, 40))).collect();
+        return Err(err(
+            "ELEMENT_NOT_FOUND",
+            format!(
+                "no option \"{}\" in this drop-down; options: {}{}",
+                clip(value, 60),
+                list.join(", "),
+                if names.len() > 20 { ", …" } else { "" }
+            ),
+            "Pass one of the option names exactly.",
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -2165,6 +2452,16 @@ mod tests {
         let mut u = info("Edit", "");
         u.aid = "searchBox".into();
         assert_eq!(u.line(), "Edit #searchBox");
+    }
+
+    // P6-M6 (ADR 0049): set_value on a drop-down picks the option by name.
+    #[test]
+    fn options_match_exactly_then_loosely() {
+        let o: Vec<String> = ["India", "Japan", " Peru ", "japan"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(match_option(&o, "japan"), Some(3), "exact wins");
+        assert_eq!(match_option(&o, "JAPAN"), Some(1), "then case-insensitive");
+        assert_eq!(match_option(&o, "peru"), Some(2), "trimmed");
+        assert_eq!(match_option(&o, "Chile"), None);
     }
 
     #[test]

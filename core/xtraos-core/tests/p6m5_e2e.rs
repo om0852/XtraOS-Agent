@@ -123,7 +123,9 @@ async fn p6m5_first_read_and_reveal() {
         assert!(has_page(&r), "{}: first read has the page: {r}", b.image);
         assert!(r["page"].is_null(), "{r}");
         eprintln!("{}: first read waited {} ms", b.image, r["waited_ms"]);
-        core.ok("close_window", json!({"window": w})).await;
+        // Not close_window: the agent did not open this browser, so that would ask the user
+        // (ADR 0028). The guard ends this test's own browser.
+        drop(_g);
 
         // 2. Minimized before its first read: says why; reveal reads it without focus change.
         let (w, _g2) = open(&mut core, b).await;
@@ -145,7 +147,7 @@ async fn p6m5_first_read_and_reveal() {
         // The page stays readable while minimized.
         let r = core.ok("observe", json!({"window": w, "full": true})).await;
         assert!(has_page(&r), "{}: still readable: {r}", b.image);
-        core.ok("close_window", json!({"window": w})).await;
+        drop(_g2);
     }
     core.stop().await;
 }

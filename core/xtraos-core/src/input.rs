@@ -660,6 +660,169 @@ fn modifiers_held() -> bool {
         .any(|&vk| held(vk as i32))
 }
 
+// ---------------------------------------------------------------------------------------------
+// Borrowing the foreground (P6-M6, ADR 0049): real input that needs a window in front waits
+// until the user is idle, brings the window up for one short burst, then gives the user's
+// window back. Any input from the user during the burst stops it.
+
+const BORROW_IDLE_MS: i64 = 1_500;
+const BORROW_TIMEOUT_MS: i64 = 30_000;
+/// Bursts longer than this ask the user first (unless they said yes for this window lately).
+const BORROW_ASK_MS: u64 = 3_000;
+const BORROW_OK_FOR: std::time::Duration = std::time::Duration::from_secs(600);
+
+static BORROW_OK: Mutex<Option<std::collections::HashMap<usize, std::time::Instant>>> =
+    Mutex::new(None);
+
+/// How long a burst takes, roughly (pure; decides whether to ask first).
+pub fn burst_estimate_ms(chars: usize, chords: usize) -> u64 {
+    150 + 12 * chars as u64 + 40 * chords as u64
+}
+
+/// Does this burst need the user's OK first? (pure)
+pub fn borrow_needs_ok(estimate_ms: u64, approved_recently: bool) -> bool {
+    estimate_ms > BORROW_ASK_MS && !approved_recently
+}
+
+pub struct Borrow {
+    prev: HWND,
+    target: HWND,
+    t0: std::time::Instant,
+    done: bool,
+}
+
+/// `borrow` (default true); `focus: true` keeps its old meaning (bring it up and leave it).
+fn borrow_wanted(p: &Value) -> Result<bool, ActError> {
+    if p.get("focus").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(false);
+    }
+    match p.get("borrow") {
+        None | Some(Value::Null) => Ok(true),
+        Some(v) => v
+            .as_bool()
+            .ok_or_else(|| bad("'borrow' must be true or false")),
+    }
+}
+
+/// Ok(None): no borrow needed (the window is already in front) or not wanted.
+pub fn borrow_begin(p: &Value, window: HWND, estimate_ms: u64) -> Result<Option<Borrow>, ActError> {
+    if crate::winmgr::foreground_root() == window || !borrow_wanted(p)? {
+        return Ok(None);
+    }
+    let key = window as usize;
+    let recent = BORROW_OK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(&key).copied())
+        .is_some_and(|t| t.elapsed() < BORROW_OK_FOR);
+    if borrow_needs_ok(estimate_ms, recent) {
+        let secs = estimate_ms.div_ceil(1000);
+        let msg = format!(
+            "The AI agent needs \"{}\" in front for about {secs} s to type.\n\nIt gives your window back afterwards. Any key or mouse movement from you stops it.",
+            crate::perceive::clip(&crate::winmgr::title(window), 60)
+        );
+        let answer = crate::safety::prompt(
+            "XtraOS Agent — may it use the keyboard?",
+            &msg,
+            vec!["Yes".into(), "No".into()],
+            1,
+            std::time::Duration::from_secs(60),
+        )?;
+        if answer != Some(0) {
+            return Err(err(
+                "NEEDS_HUMAN",
+                "the user did not allow the agent to take the window for this long",
+                "Send shorter text, or ask the user to do this step (ask_human).",
+            ));
+        }
+        BORROW_OK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(Default::default)
+            .insert(key, std::time::Instant::now());
+    }
+    let explicit = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+    let o = Polite {
+        idle_ms: if explicit("idle_ms") {
+            opt_int(p, "idle_ms", BORROW_IDLE_MS, 0, 60_000)? as u32
+        } else {
+            BORROW_IDLE_MS as u32
+        },
+        timeout_ms: if explicit("timeout_ms") {
+            opt_int(p, "timeout_ms", BORROW_TIMEOUT_MS, 0, 120_000)? as u32
+        } else {
+            BORROW_TIMEOUT_MS as u32
+        },
+        restore_cursor: false,
+    };
+    wait_user_idle(&o)?;
+    if modifiers_held() {
+        return Err(user_active("a modifier key is held"));
+    }
+    let prev = crate::winmgr::foreground_root();
+    if !crate::winmgr::focus(window) {
+        return Err(err(
+            "NEEDS_HUMAN",
+            "Windows did not allow the window to come to the front; nothing was sent",
+            "Ask the user to click the window once, then retry.",
+        ));
+    }
+    Ok(Some(Borrow {
+        prev,
+        target: window,
+        t0: std::time::Instant::now(),
+        done: false,
+    }))
+}
+
+impl Borrow {
+    /// The user pressed a key, clicked or moved the mouse since the burst began.
+    fn interrupted(&self) -> bool {
+        let since = self.t0.elapsed().as_millis() as u64;
+        matches!(crate::safety::user_idle_ms(), Some(ms) if ms != u32::MAX && u64::from(ms) < since)
+    }
+
+    /// Between steps: stop at once when the user acts (the window is given back on drop).
+    pub fn check(&self) -> Result<(), ActError> {
+        if self.interrupted() {
+            return Err(err(
+                "USER_ACTIVE",
+                "the user used the PC while the agent had the window; it stopped and gave the window back",
+                "Retry later; the agent waits until the user is idle again.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Gives the user's window back; returns how long the window was borrowed.
+    pub fn finish(mut self) -> u64 {
+        self.give_back();
+        self.t0.elapsed().as_millis() as u64
+    }
+
+    fn give_back(&mut self) {
+        if self.done {
+            return;
+        }
+        self.done = true;
+        // Only when the agent's window is still in front: if the user moved on, leave it.
+        if !self.prev.is_null()
+            && self.prev != self.target
+            && crate::winmgr::exists(self.prev)
+            && crate::winmgr::foreground_root() == self.target
+        {
+            crate::winmgr::focus(self.prev);
+        }
+    }
+}
+
+impl Drop for Borrow {
+    fn drop(&mut self) {
+        self.give_back();
+    }
+}
+
 /// `focus: true` (type, press_keys): bring the window to the front first, as focus_window
 /// would, so one call does it. The foreground is still re-checked before every chunk/chord.
 fn focus_if_asked(p: &Value, window: HWND) -> Result<(), ActError> {
@@ -985,11 +1148,32 @@ fn click(p: &Value) -> Result<Value, ActError> {
             }
         }
         let pt = t.center()?;
-        return click_at(pt, Some(t.window), button, clicks, &mods, &o);
+        return click_borrowing(p, pt, Some(t.window), button, clicks, &mods, &o);
     }
     let pt = point(p, "x", "y")?;
     let window = window_arg(p, "window", false)?;
-    click_at(pt, window, button, clicks, &mods, &o)
+    click_borrowing(p, pt, window, button, clicks, &mods, &o)
+}
+
+/// P6-M6: a real click into a window that is covered at that point borrows the foreground.
+fn click_borrowing(
+    p: &Value,
+    pt: POINT,
+    window: Option<HWND>,
+    button: Button,
+    clicks: i64,
+    mods: &[u16],
+    o: &Polite,
+) -> Result<Value, ActError> {
+    let borrow = match window {
+        Some(w) if root_at(pt) != w => borrow_begin(p, w, burst_estimate_ms(0, clicks as usize))?,
+        _ => None,
+    };
+    let mut out = click_at(pt, window, button, clicks, mods, o)?;
+    if let Some(b) = borrow {
+        out["borrowed_ms"] = json!(b.finish());
+    }
+    Ok(out)
 }
 
 fn click_at(
@@ -1239,7 +1423,19 @@ fn drag(p: &Value) -> Result<Value, ActError> {
 }
 
 fn type_text(p: &Value) -> Result<Value, ActError> {
-    let window = window_arg(p, "window", true)?.expect("required");
+    // P6-M6 (ADR 0049): `ref` = the field to type into (focused through UI Automation).
+    let target = match p.get("ref").filter(|v| !v.is_null()) {
+        Some(r) => Some(crate::perceive::resolve(r)?),
+        None => None,
+    };
+    let window = match (&target, window_arg(p, "window", false)?) {
+        (Some(t), Some(w)) if w != t.window => {
+            return Err(bad("'ref' belongs to another window than 'window'"))
+        }
+        (Some(t), _) => t.window,
+        (None, Some(w)) => w,
+        (None, None) => return Err(bad("'window' or 'ref' is required")),
+    };
     let text = p
         .get("text")
         .and_then(Value::as_str)
@@ -1247,21 +1443,48 @@ fn type_text(p: &Value) -> Result<Value, ActError> {
     if text.chars().count() > 10_000 {
         return Err(bad("'text' is limited to 10,000 characters per call"));
     }
-    let submit = p.get("submit").and_then(Value::as_bool).unwrap_or(false);
-    wait_user_idle(&polite_args(p, false)?)?;
-    if modifiers_held() {
-        return Err(user_active(
-            "a modifier key is held (typed text would become shortcuts)",
-        ));
+    if let Some(t) = &target {
+        if crate::perceive::is_password(t) {
+            return Err(err(
+                "NEEDS_HUMAN",
+                "this is a password field; the agent never enters passwords",
+                "Ask the user to type it (ask_human).",
+            ));
+        }
     }
-    focus_if_asked(p, window)?;
+    let submit = p.get("submit").and_then(Value::as_bool).unwrap_or(false);
+    let estimate = burst_estimate_ms(text.chars().count(), usize::from(submit));
+    let borrow = borrow_begin(p, window, estimate)?;
+    if borrow.is_none() {
+        wait_user_idle(&polite_args(p, false)?)?;
+        if modifiers_held() {
+            return Err(user_active(
+                "a modifier key is held (typed text would become shortcuts)",
+            ));
+        }
+        focus_if_asked(p, window)?;
+    }
     foreground_is(window)?;
+    if let Some(t) = &target {
+        crate::perceive::focus_element(t)?;
+        sleep(Duration::from_millis(60));
+        if crate::perceive::focused_is_password() {
+            return Err(err(
+                "NEEDS_HUMAN",
+                "the focused field is a password field; the agent never enters passwords",
+                "Ask the user to type it (ask_human).",
+            ));
+        }
+    }
     let chars = text_events(text);
     let idle = InputIdle::open(window);
     // Chunks of 8 characters, each followed by waiting until the app has processed them
     // (adaptive: fast apps get the text at once, slow ones are not flooded). The foreground
     // is re-checked before every chunk, so nothing goes to a window the user switched to.
     for chunk in chars.chunks(8) {
+        if let Some(b) = &borrow {
+            b.check()?;
+        }
         foreground_is(window)?;
         let evs: Vec<INPUT> = chunk.iter().flat_map(|u| char_events(u)).collect();
         send(&evs)?;
@@ -1278,6 +1501,9 @@ fn type_text(p: &Value) -> Result<Value, ActError> {
     }
     let settled = settle_focused_value();
     if submit {
+        if let Some(b) = &borrow {
+            b.check()?;
+        }
         foreground_is(window)?;
         send_char(&[INPUTDESC::Vk(VK_RETURN)])?;
         if let Some(w) = &idle {
@@ -1285,9 +1511,11 @@ fn type_text(p: &Value) -> Result<Value, ActError> {
         }
     }
     // Never echo the text back (it may be sensitive); report only the count.
-    Ok(
-        json!({"typed_chars": chars.len(), "submitted": submit, "settled": settled, "mode": "input"}),
-    )
+    let mut out = json!({"typed_chars": chars.len(), "submitted": submit, "settled": settled, "mode": "input"});
+    if let Some(b) = borrow {
+        out["borrowed_ms"] = json!(b.finish());
+    }
+    Ok(out)
 }
 
 /// Polls the focused field's value length until it is unchanged twice in a row (40 ms apart,
@@ -1339,12 +1567,18 @@ fn press_keys(p: &Value) -> Result<Value, ActError> {
                 .and_then(parse_chord)
         })
         .collect::<Result<_, _>>()?;
-    wait_user_idle(&polite_args(p, false)?)?;
-    if modifiers_held() {
-        return Err(user_active("a modifier key is held"));
+    let borrow = borrow_begin(p, window, burst_estimate_ms(0, chords.len()))?;
+    if borrow.is_none() {
+        wait_user_idle(&polite_args(p, false)?)?;
+        if modifiers_held() {
+            return Err(user_active("a modifier key is held"));
+        }
+        focus_if_asked(p, window)?;
     }
-    focus_if_asked(p, window)?;
     for c in &chords {
+        if let Some(b) = &borrow {
+            b.check()?;
+        }
         foreground_is(window)?;
         let _mods = ModHold::press(&c.mods)?;
         send(&[key_event(c.key, false)])?;
@@ -1353,7 +1587,11 @@ fn press_keys(p: &Value) -> Result<Value, ActError> {
         drop(_mods);
         sleep(Duration::from_millis(30));
     }
-    Ok(json!({"chords": chords.len(), "mode": "input"}))
+    let mut out = json!({"chords": chords.len(), "mode": "input"});
+    if let Some(b) = borrow {
+        out["borrowed_ms"] = json!(b.finish());
+    }
+    Ok(out)
 }
 
 fn clipboard(p: &Value) -> Result<Value, ActError> {
@@ -1630,5 +1868,31 @@ mod tests {
                 .code,
             "INVALID_ARGS"
         );
+        assert_eq!(
+            run("type", &json!({"text": "hi", "window": 1, "borrow": "yes"}))
+                .unwrap_err()
+                .code,
+            "WINDOW_NOT_FOUND",
+            "the window is resolved before the borrow option is read"
+        );
+        assert_eq!(
+            run("type", &json!({"text": "hi", "ref": "x"})).unwrap_err().code,
+            "INVALID_ARGS"
+        );
+    }
+
+    // P6-M6 (ADR 0049): when a borrow asks the user first.
+    #[test]
+    fn long_bursts_ask_first_short_ones_do_not() {
+        assert!(burst_estimate_ms(20, 0) < BORROW_ASK_MS, "a short field");
+        assert!(burst_estimate_ms(1000, 0) > BORROW_ASK_MS, "a long letter");
+        assert!(burst_estimate_ms(0, 3) < BORROW_ASK_MS, "a few chords");
+        assert!(!borrow_needs_ok(500, false));
+        assert!(borrow_needs_ok(5_000, false));
+        assert!(!borrow_needs_ok(5_000, true), "the user said yes for this window lately");
+        assert_eq!(borrow_wanted(&json!({})).unwrap(), true, "on by default");
+        assert_eq!(borrow_wanted(&json!({"borrow": false})).unwrap(), false);
+        assert_eq!(borrow_wanted(&json!({"focus": true})).unwrap(), false, "focus keeps its meaning");
+        assert!(borrow_wanted(&json!({"borrow": 1})).is_err());
     }
 }

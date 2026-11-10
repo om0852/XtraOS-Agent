@@ -179,6 +179,7 @@ async fn p6m4_browser_alert_is_reported_first() {
     core.ok("click", json!({"ref": ok})).await;
     let r = observe_until(&mut core, &w, |r| r["dialog"].is_null()).await;
     assert!(r["dialog"].is_null(), "alert answered: {r}");
-    core.ok("close_window", json!({"window": w})).await;
+    // Not close_window: the agent did not open this browser, so that would ask the user
+    // (ADR 0028). EndEdgeOnDrop ends this test's own Edge.
     core.stop().await;
 }

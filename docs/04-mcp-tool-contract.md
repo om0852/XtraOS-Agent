@@ -30,6 +30,14 @@ USER_ACTIVE` (user held a button/modifier or moved the mouse — action aborted,
 `STALE_REF` (the element of a ref is gone or its window closed — observe again, ADR 0015).
 `NEEDS_HUMAN` also when the screen is locked or a UAC/secure prompt is showing (ADR 0025).
 
+**Health warnings (ADR 0050).** While the PC is under strain (RAM ≥ 90 %, CPU ≥ 95 % for 30 s,
+a thermal zone ≥ 90 °C, the system drive almost full, ≥ 15 windows/tabs opened by the agent in
+10 minutes, or one app grew by ≥ 40 processes since the session started), every result object
+carries `health_warning` (text) and the MCP server adds a `⚠` line. At the critical level
+(RAM ≥ 95 %, ≥ 98 °C, < 1 GB free, ≥ 30 opened, +100 processes), `launch_app`, `browser`
+open_tab and `run_skill files.open` ask the user first; no → `BLOCKED_BY_POLICY`. Reading and
+closing are never braked; XtraOS never kills processes.
+
 ## Perception
 
 | Tool | Args | Returns | Phase |
@@ -57,7 +65,7 @@ case-insensitive, exact title first; one match is used, none is `WINDOW_NOT_FOUN
 | `cleanup` | — | closes every still-open window the agent opened (only those); lists what is left | P2 (M4) |
 | `audit_export` | `from?`, `to?` (YYYY-MM-DD, local, inclusive), `format?` csv\|json, `out?` | the action log for the range with seq/time/session/client/method/result/policy/hash; chain check + head hash in the result; never overwrites; protected paths refused | P4 (ADR 0042) |
 | `sandbox` | `op`: status \| start (`network?`) \| call (`tool`, `args`, `timeout_ms?`) \| stop | Windows Sandbox desktop; a second XtraOS inside; host ↔ inside via numbered request files in `%USERPROFILE%\.xtraos-sandbox` (token, size limits, untrusted replies); `start` without the feature, or with a Sandbox the user opened → `NEEDS_HUMAN`; first start can take minutes (`start` again keeps waiting); inside, text via `set_value` and buttons via `click` ref (UIA), `type` needs the Sandbox window in front → `NEEDS_HUMAN` (ADR 0040) | P3 (M4) |
-| `system` | `op`: battery \| brightness (`value?` 0–100) \| wifi / bluetooth (`state?` on\|off) \| lock \| sleep | OS APIs, background; radio switches, lock and sleep are `system_settings` (ask); shutdown/restart/sign-out, firewall, antivirus, accounts, network config, registry are deliberately not offered | P3 |
+| `system` | `op`: health \| battery \| brightness (`value?` 0–100) \| wifi / bluetooth (`state?` on\|off) \| lock \| sleep | OS APIs, background; radio switches, lock and sleep are `system_settings` (ask); shutdown/restart/sign-out, firewall, antivirus, accounts, network config, registry are deliberately not offered. `health` (ADR 0050, read-only, no admin): `cpu_pct`, `ram` {used_gb, total_gb, pct}, `gpu_pct`, `temps` [{zone, c}] (firmware thermal zones; "not available" when none), `disks` [{drive, free_gb, pct_free}], `wifi` {signal_pct} (no network name), `battery`, `top` (5 apps using most memory {app, processes, mb}), `warnings` | P3, health ADR 0050 |
 | `volume` | `op`: get \| set (`value` 0–100) \| change (`by` −100..100) \| mute \| unmute | Windows master volume of the default speakers via Core Audio, background; `{volume, muted, before}` | P3 |
 | `touch` | `action`: tap \| long_press \| drag \| pinch \| swipe; `x`,`y`, `to_x`,`to_y`, `fingers` (1–4), `scale`, `distance`, `duration_ms`, `idle_ms` | real synthetic touch (InjectSyntheticPointerInput), polite; 3–4 finger swipes = `system_settings` (ask); never on XtraOS/admin windows | P3 (M3) |
 | `pen` | `action`: tap (`x`,`y`) \| draw (`points` [[x,y,pressure?]…] ≤ 2000); `pressure` 0–1024 | real synthetic pen with pressure, path filled ≤ 8 px per frame | P3 (M3) |
@@ -80,13 +88,13 @@ all real-input tools accept `idle_ms`. `drag` ends can be refs: `from_ref`, `to_
 
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
-| `click` | `x, y` or `ref`; `window?`; `button?` (left/right/middle), `clicks?` (1–3), `modifiers?` (ctrl/shift/alt/win) | ok | P1 (M2) |
-| `type` | `window` (required, must be foreground, or `focus: true` brings it to the front first), `text` (≤ 10,000 chars, unicode), `submit?` | ok; returns once the app has the text (M6: `settled`) | P1 (M2) |
-| `press_keys` | `window` (required, must be foreground, or `focus: true`), `keys[]` e.g. `["Ctrl+S"]` (one chord may be a plain string, P6-M3) | ok | P1 (M2) |
+| `click` | `x, y` or `ref`; `window?`; `button?` (left/right/middle), `clicks?` (1–3), `modifiers?` (ctrl/shift/alt/win), `borrow?` (P6-M6) | ok; a ref on a `Text`/`Image` without an action tries its parent (`via: parent_invoke`); a real click into a window covered at that point borrows it (`borrowed_ms`) | P1 (M2), P6-M6 |
+| `type` | `ref` (the field, focused via UIA; P6-M6) or `window`; `text` (≤ 10,000 chars, unicode), `submit?`, `focus?` (bring up and leave it), `borrow?` (default true) | ok; returns once the app has the text (M6: `settled`); password field → `NEEDS_HUMAN`. Borrow (ADR 0049): a window not in front is brought up after the user has been idle 1.5 s (wait ≤ 30 s, else `USER_ACTIVE`), one burst, then the user's window is given back (`borrowed_ms`); user input during the burst → `USER_ACTIVE`; bursts > 3 s ask the user first (a yes lasts 10 min per window); `borrow:false` → old `NEEDS_HUMAN` | P1 (M2), P6-M6 |
+| `press_keys` | `window`, `keys[]` e.g. `["Ctrl+S"]` (one chord may be a plain string, P6-M3), `focus?`, `borrow?` (default true) | ok; borrows like `type` | P1 (M2), P6-M6 |
 | `scroll` | `x, y` or `ref`, `window?`, `dx?`, `dy?` (notches; dy > 0 scrolls down) | ok | P1 (M2; ref M4) |
 | `drag` | `from_ref` or `from_x, from_y`; `to_ref` or `to_x, to_y`; `window?`, `to_window?`, `steps?`, `step_ms?`, `hold_ms?`, `drop_on_item?` | ok; ends early → cancelled (Esc), nothing dropped; a drop at x,y onto another item → `TARGET_OCCUPIED` unless `drop_on_item` (a `to_ref` target is intended) | P1 (M2; refs M4) |
 | `mouse` | `action` (move/down/up/path), `x, y` or `points[[x,y],...]`, `button?`, `window?` | ok | P1 (M2) |
-| `set_value` | `ref`, `value` (UIA ValuePattern, no typing; password field → `NEEDS_HUMAN`) | ok `mode=background` | P1 (M4) |
+| `set_value` | `ref`, `value` (UIA ValuePattern, no typing; password field → `NEEDS_HUMAN`) | ok `mode=background`. P6-M6 (ADR 0049): on a drop-down, selects the option with that name (exact, then case-insensitive) and reads it back (`via: select_option`); no such option → `ELEMENT_NOT_FOUND` listing the options; a browser `<select>` is opened for ≈ 0.5 s after the user is idle 1.5 s. A browser text field adds `note` (rich-text editors may not notice; use `type {ref, text}`) | P1 (M4), P6-M6 |
 | `clipboard` | `op` (get/set), `text?` | text | P1 (M2) |
 | `batch` | `steps[]` (≤ 50) of `{tool, args}`: input, window and read tools, ocr, app_map, built-in `run_skill`; each step passes the policy; `stop_on_error?` (default true) | one line per step | P2 (M1; M3) |
 
@@ -101,7 +109,7 @@ Stop) every call returns `STOPPED` until the user resumes from the tray; there i
 | `wait_for` | `window?`, `window_title?`, `text_contains?`, `ref_gone?`, `window_gone?`, `idle_ms?`, `timeout_ms?` (default 10 s, max 120 s); all given conditions at once | met conditions (+ window ref) / `TIMEOUT` | P2 (M1; was P1, not built in Phase 1) |
 | `ask_human` | `message`, `kind` (confirm/choice/info/task), `options?` (choice: 2–5), `timeout_ms?` (default 120 s) | answer (`yes`/`no`/option/`ok`); `task` → `request_id` at once | P1 (M5) |
 | `wait_for_human` | `request_id`, `timeout_ms?` | `done` / `denied` (else `TIMEOUT`) | P1 (M5) |
-| `status` | — | running/stopped, paired client, kill hotkey, policy file (M5); `dialog`: the foreground window's owned dialog (or the foreground window when it is one) `{window, title, process, owner, blocking}` or `null` — Win32 dialogs only, in-page browser dialogs show in `observe` (P6-M4, ADR 0047) | P1, P6-M4 |
+| `status` | — | running/stopped, paired client, kill hotkey, policy file (M5); `dialog`: the foreground window's owned dialog (or the foreground window when it is one) `{window, title, process, owner, blocking}` or `null` — Win32 dialogs only, in-page browser dialogs show in `observe` (P6-M4, ADR 0047); `health` {cpu_pct, ram_pct, warnings} (ADR 0050) | P1, P6-M4, ADR 0050 |
 
 ## Skills & memory (P2)
 

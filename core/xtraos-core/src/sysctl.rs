@@ -1,4 +1,5 @@
 //! `system`: common Windows controls (ADR 0039), each through the OS API, in the background.
+//!   health                       read CPU/RAM/GPU/temperatures/disks/Wi-Fi/top apps (ADR 0050)
 //!   battery                      read (percent, charging, time left)
 //!   brightness [value 0-100]     read / set the built-in display (WMI WmiMonitorBrightness)
 //!   wifi | bluetooth [state on|off]   read / switch the radio (Windows.Devices.Radios)
@@ -26,7 +27,7 @@ fn bad(m: impl Into<String>) -> ActError {
     ActError {
         code: "INVALID_ARGS",
         message: m.into(),
-        hint: "system {op: battery | brightness [value] | wifi [state] | bluetooth [state] | lock | sleep}",
+        hint: "system {op: health | battery | brightness [value] | wifi [state] | bluetooth [state] | lock | sleep}",
     }
 }
 
@@ -73,6 +74,11 @@ extern "system" {
 #[link(name = "powrprof")]
 extern "system" {
     fn SetSuspendState(hibernate: u8, force: u8, wake_events_disabled: u8) -> u8;
+}
+
+/// `system health` includes the battery (ADR 0050).
+pub fn battery_json() -> Result<Value, ActError> {
+    battery()
 }
 
 fn battery() -> Result<Value, ActError> {
@@ -320,6 +326,8 @@ pub fn run(p: &Value) -> Result<Value, ActError> {
     let op = p.get("op").and_then(Value::as_str).unwrap_or("");
     match op {
         "battery" => battery(),
+        // ADR 0050: CPU, RAM, GPU, temperatures, disks, Wi-Fi, top apps, warnings (read-only).
+        "health" => crate::health::report(),
         "brightness" => {
             let v = match p.get("value") {
                 None | Some(Value::Null) => None,

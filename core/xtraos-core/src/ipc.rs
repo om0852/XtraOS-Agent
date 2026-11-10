@@ -223,6 +223,15 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
                         hint: "",
                     }),
                 };
+                // ADR 0050: while the PC is under strain every result says so.
+                let res = res.map(|mut v| {
+                    if v.is_object() {
+                        if let Some(w) = crate::health::warning_text() {
+                            v["health_warning"] = serde_json::json!(w);
+                        }
+                    }
+                    v
+                });
                 match res {
                     Ok(v) => (
                         Outcome::Reply(serde_json::json!({"jsonrpc":"2.0","id":id,"result":v})),

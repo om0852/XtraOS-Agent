@@ -27,9 +27,11 @@ export type ToolDef = {
 const int = (description: string) => ({ type: 'integer', description });
 const WINDOW = {
   type: ['string', 'integer'],
-  description: 'Window: ref from list_windows ("w460650"), part of its title, a process name ("chrome"), or "desktop" (icon view). Mouse: optional guard (point must be inside). Keyboard: required, must be the foreground window.',
+  description: 'Window: ref from list_windows ("w460650"), part of its title, a process name ("chrome"), or "desktop" (icon view). Mouse: the point must be inside it.',
 };
-const FOCUS = { type: 'boolean', description: 'Bring the window to the front first (like focus_window), default false' };
+const FOCUS = { type: 'boolean', description: 'Bring the window to the front and leave it there' };
+/** P6-M6 (ADR 0049): borrow the foreground for one burst, then give the user's window back. */
+const BORROW = { type: 'boolean', description: 'Default true: not in front → brought up when the user is idle, then theirs back' };
 const WINDOW_REQ = { type: ['string', 'integer'], description: 'Window: ref from list_windows ("w460650"), part of its title, a process name ("chrome"), or "desktop" (icon view)' };
 
 type Win = { ref: string; process: string; title: string; x: number; y: number; w: number; h: number; state: string; focused: boolean; elevated: boolean; agent?: boolean; reused?: boolean };
@@ -48,8 +50,15 @@ const RESTORE = { type: 'boolean', description: 'Put the cursor back afterwards 
 /** "ok click e12 · background (invoke)" / "ok click ×1 at (x,y) · input" */
 const how = (r: any) =>
   r.mode === 'background' ? ` · background (${r.via}${r.foreground_restored ? ', focus kept' : ''})` : ' · input';
+/** " · window borrowed 640 ms" (P6-M6) */
+const lent = (r: any) => (typeof r.borrowed_ms === 'number' ? ` · window borrowed ${r.borrowed_ms} ms` : '');
 
-type Status = { version: string; session: string; client: string; state: string; uptime_ms: number; kill_hotkey: string | null; admin_helper?: { running: boolean; pid?: number } };
+type Status = {
+  version: string; session: string; client: string; state: string; uptime_ms: number; kill_hotkey: string | null;
+  admin_helper?: { running: boolean; pid?: number };
+  dialog?: { window: string; title: string; blocking: boolean } | null;
+  health?: { cpu_pct: number | null; ram_pct: number | null; warnings: string[] };
+};
 
 /** Forwards to the core and renders a compact one-line result (docs/06: <= 30 tokens). */
 const forward = (method: string, render: (r: any, a: Record<string, unknown>) => string) =>
@@ -67,7 +76,10 @@ export const TOOLS: ToolDef[] = [
       const s = (await core.call('status')) as Status;
       return `XtraOS core ${s.version} · ${s.state} · session ${s.session} (${s.client}) · up ${Math.round(s.uptime_ms / 1000)}s` +
         (s.kill_hotkey ? ` · stop: ${s.kill_hotkey}` : ' · stop: tray icon') +
-        (s.admin_helper?.running ? ` · admin helper on (pid ${s.admin_helper.pid})` : '');
+        (s.admin_helper?.running ? ` · admin helper on (pid ${s.admin_helper.pid})` : '') +
+        (s.health && s.health.ram_pct != null ? ` · CPU ${Math.round(s.health.cpu_pct ?? 0)} % RAM ${Math.round(s.health.ram_pct)} %` : '') +
+        (s.dialog ? `\n!! dialog ${s.dialog.window} "${s.dialog.title}"${s.dialog.blocking ? ' (blocking)' : ''}: observe it` : '') +
+        (s.health?.warnings.length ? `\n⚠ ${s.health.warnings.join('; ')}` : '');
     },
   },
   {
@@ -75,58 +87,58 @@ export const TOOLS: ToolDef[] = [
     description:
       'Clicks an element or a point. PREFER `ref` (from observe/find): a plain left click on a ref runs in the ' +
       'background through the element itself — no cursor move, no keystrokes, the user keeps working. ' +
-      'Otherwise real mouse input at (x, y): it waits until the user is idle, refuses (TARGET_OBSCURED) if the point ' +
-      'is not inside `window`, aborts (USER_ACTIVE) if the user moves the mouse, and puts the cursor back.',
+      'Otherwise real mouse input at (x, y): waits until the user is idle, borrows the window if it is covered, ' +
+      'aborts (USER_ACTIVE) if the user moves the mouse, puts the cursor back.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: REF, x: X, y: Y, window: WINDOW, button: BUTTON,
         clicks: { type: 'integer', minimum: 1, maximum: 3, description: '1 = click, 2 = double, 3 = triple' },
         modifiers: { type: 'array', items: { type: 'string', enum: ['ctrl', 'shift', 'alt', 'win'] }, description: 'Keys held during the click' },
-        idle_ms: IDLE, timeout_ms: TIMEOUT, restore_cursor: RESTORE,
+        idle_ms: IDLE, timeout_ms: TIMEOUT, restore_cursor: RESTORE, borrow: BORROW,
       },
       additionalProperties: false,
     },
     run: forward('click', (r, a) =>
-      r.mode === 'background' ? `ok click ${a.ref}${how(r)}` : `ok click ×${r.clicks} at (${r.at[0]},${r.at[1]})${how(r)}`),
+      (r.mode === 'background' ? `ok click ${a.ref}${how(r)}` : `ok click ×${r.clicks} at (${r.at[0]},${r.at[1]})${how(r)}`) + lent(r)),
   },
   {
     name: 'type',
     description:
-      'Types unicode text (any language, emoji) with real keyboard input into `window`, which must be the ' +
-      'foreground window (else NEEDS_HUMAN, nothing typed). Waits until the user is idle. Newline = Enter, tab = Tab. ' +
-      'The text is never logged. To fill a field without the keyboard, prefer set_value(ref).',
+      'Types text (any language, emoji) with real keys into field `ref` or the focused field of `window`. ' +
+      'A window not in front is borrowed (see borrow). Newline = Enter. Never logged. Text inputs: set_value(ref) needs no keys.',
     inputSchema: {
       type: 'object',
       properties: {
+        ref: REF,
         window: WINDOW,
         text: { type: 'string', maxLength: 10000, description: 'Text to type' },
         submit: { type: 'boolean', description: 'Press Enter afterwards' },
-        focus: FOCUS,
+        focus: FOCUS, borrow: BORROW,
         idle_ms: IDLE, timeout_ms: TIMEOUT,
       },
-      required: ['window', 'text'],
+      required: ['text'],
       additionalProperties: false,
     },
-    run: forward('type', (r) => `ok typed ${r.typed_chars} chars${r.submitted ? ' + Enter' : ''}`),
+    run: forward('type', (r) => `ok typed ${r.typed_chars} chars${r.submitted ? ' + Enter' : ''}${lent(r)}`),
   },
   {
     name: 'press_keys',
     description:
-      'Presses key chords in order with real keyboard input, e.g. ["Ctrl+S"], ["Ctrl+Shift+P"], ["Alt+F4"], ["Enter"]. ' +
-      '`window` must be the foreground window (else NEEDS_HUMAN). Modifiers are always released.',
+      'Presses key chords in order with real keys, e.g. ["Ctrl+S"], ["Alt+F4"], ["Enter"]. A window not in front is ' +
+      'borrowed (see borrow). Modifiers always released.',
     inputSchema: {
       type: 'object',
       properties: {
         window: WINDOW,
-        keys: { type: ['array', 'string'], items: { type: 'string' }, minItems: 1, maxItems: 100, description: 'Chords, pressed in order, e.g. ["Ctrl+S"]; one chord may be a plain string' },
-        focus: FOCUS,
+        keys: { type: ['array', 'string'], items: { type: 'string' }, minItems: 1, maxItems: 100, description: 'Chords in order, e.g. ["Ctrl+S"]; or one string' },
+        focus: FOCUS, borrow: BORROW,
         idle_ms: IDLE, timeout_ms: TIMEOUT,
       },
       required: ['window', 'keys'],
       additionalProperties: false,
     },
-    run: forward('press_keys', (r) => `ok ${r.chords} chord(s)`),
+    run: forward('press_keys', (r) => `ok ${r.chords} chord(s)${lent(r)}`),
   },
   {
     name: 'scroll',
@@ -309,16 +321,18 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'set_value',
     description:
-      'Sets the text of a field in the background (no keystrokes, no focus change) via UI Automation. ' +
-      'Refuses password fields (NEEDS_HUMAN: the user types passwords). If the element has no settable value, ' +
-      'use click(ref) + type.',
+      'Sets a field in the background (no keys, no focus change). On a drop-down it selects the option with that ' +
+      'name. Refuses password fields (NEEDS_HUMAN). No settable value: type {ref, text}.',
     inputSchema: {
       type: 'object',
       properties: { ref: REF, value: { type: 'string', maxLength: 10000 } },
       required: ['ref', 'value'],
       additionalProperties: false,
     },
-    run: forward('set_value', (r, a) => `ok set ${a.ref} (${r.chars} chars)${how(r)}`),
+    run: forward('set_value', (r, a) =>
+      r.via === 'select_option'
+        ? `ok selected "${r.option}" in ${a.ref}${how(r)}`
+        : `ok set ${a.ref} (${r.chars} chars)${how(r)}${r.note ? ` · note: ${r.note}` : ''}`),
   },
   {
     name: 'wait_for',
@@ -575,13 +589,14 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'system',
     description:
-      'Common PC controls through the OS, in the background: battery (read), brightness (read; value 0-100 sets the ' +
+      'Common PC controls through the OS, in the background: health (read CPU, RAM, GPU, temperatures, disks, Wi-Fi, ' +
+      'apps using most memory, warnings), battery (read), brightness (read; value 0-100 sets the ' +
       'built-in screen), wifi / bluetooth (read; state on|off switches: asks the user first), lock and sleep (ask the ' +
       'user first). Not offered: shutdown/restart/sign-out, firewall, antivirus, accounts, network or registry changes.',
     inputSchema: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['battery', 'brightness', 'wifi', 'bluetooth', 'lock', 'sleep'] },
+        op: { type: 'string', enum: ['health', 'battery', 'brightness', 'wifi', 'bluetooth', 'lock', 'sleep'] },
         value: { type: 'integer', minimum: 0, maximum: 100 },
         state: { type: 'string', enum: ['on', 'off'] },
       },
@@ -809,7 +824,7 @@ export const INSTRUCTIONS = [
   'How to work:',
   '1. Get a window: list_windows, or launch_app (returns its ref, e.g. "w460650").',
   '2. observe it: you get elements with refs like "e12". Repeat observe returns only what changed; pass full:true for the whole list.',
-  '3. Act on refs: click and scroll with a ref work in the background (no cursor, no focus change). type and press_keys need the window in front: pass focus:true.',
+  '3. Act on refs: click and scroll with a ref work in the background (no cursor, no focus change). type {ref, text} and press_keys borrow a window not in front while the user is idle.',
   '4. Use find, read_text and wait_for instead of screenshots; use screenshot only when observe says the window is opaque.',
   '5. run_skill does common jobs in one call (list_skills shows them, e.g. files.find).',
   'Errors: STALE_REF → observe again. USER_ACTIVE → the user is using the mouse or keyboard; retry later. NEEDS_HUMAN / BLOCKED_BY_POLICY → the user must act or has not allowed it; tell them, do not work around it. STOPPED → the user pressed the kill switch (Ctrl+Alt+Esc); only they can resume.',

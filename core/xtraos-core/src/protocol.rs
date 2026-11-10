@@ -222,6 +222,8 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                 "admin_helper": crate::helper::status_json(),
                 // P6-M4 (ADR 0047): an owned dialog of the foreground window, or null.
                 "dialog": crate::winmgr::foreground_dialog(),
+                // ADR 0050: CPU/RAM headline and active warnings.
+                "health": crate::health::status_json(),
             }),
             method,
         ),

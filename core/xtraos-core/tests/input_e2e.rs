@@ -446,15 +446,19 @@ async fn in09_keyboard_refused_when_target_is_not_foreground() {
     let class: Vec<u16> = "Shell_TrayWnd\0".encode_utf16().collect();
     let taskbar = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) } as u64;
     assert_ne!(taskbar, 0, "taskbar not found");
+    // borrow:false = the strict mode (P6-M6, ADR 0049 made borrowing the default).
     let r = core
         .call(
             "type",
-            json!({"window": taskbar, "text": "should-not-appear"}),
+            json!({"window": taskbar, "text": "should-not-appear", "borrow": false}),
         )
         .await;
     assert_eq!(code(&r), "NEEDS_HUMAN", "{r}");
     let r = core
-        .call("press_keys", json!({"window": taskbar, "keys": ["Ctrl+A"]}))
+        .call(
+            "press_keys",
+            json!({"window": taskbar, "keys": ["Ctrl+A"], "borrow": false}),
+        )
         .await;
     assert_eq!(code(&r), "NEEDS_HUMAN", "{r}");
     let st = tb.state();
@@ -479,9 +483,12 @@ async fn in09b_focus_true_brings_the_window_forward_then_types() {
     .await;
     std::thread::sleep(Duration::from_millis(400));
     let r = core
-        .call("type", json!({"window": tb.hwnd, "text": "no"}))
+        .call(
+            "type",
+            json!({"window": tb.hwnd, "text": "no", "borrow": false}),
+        )
         .await;
-    assert_eq!(code(&r), "NEEDS_HUMAN", "not in front, no focus: {r}");
+    assert_eq!(code(&r), "NEEDS_HUMAN", "not in front, no focus, no borrow: {r}");
     core.ok(
         "type",
         json!({"window": tb.hwnd, "text": "focused", "focus": true}),
@@ -500,6 +507,18 @@ async fn in09b_focus_true_brings_the_window_forward_then_types() {
     )
     .await;
     assert_eq!(tb.state()["text"], "");
+    // P6-M6: by default a window not in front is borrowed for the burst.
+    core.ok(
+        "window_bounds",
+        json!({"window": tb.hwnd, "state": "minimize"}),
+    )
+    .await;
+    std::thread::sleep(Duration::from_millis(400));
+    let r = core
+        .ok("type", json!({"window": tb.hwnd, "text": "lent"}))
+        .await;
+    assert!(r["borrowed_ms"].as_u64().is_some(), "{r}");
+    assert_eq!(tb.state()["text"], "lent");
     assert_nothing_stuck();
     core.stop().await;
 }

@@ -14,6 +14,7 @@ pub mod capture;
 pub mod cli;
 pub mod exec;
 pub mod framediff;
+pub mod health;
 pub mod helper;
 pub mod input;
 pub mod ipc;

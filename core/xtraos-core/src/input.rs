@@ -1314,10 +1314,20 @@ fn settle_focused_value() -> Option<bool> {
 
 fn press_keys(p: &Value) -> Result<Value, ActError> {
     let window = window_arg(p, "window", true)?.expect("required");
-    let list = p
-        .get("keys")
-        .and_then(Value::as_array)
-        .ok_or_else(|| bad("'keys' (array of chords) is required"))?;
+    // P6-M3 (ADR 0046): one chord may be given as a plain string ("Ctrl+S").
+    let single;
+    let list = match p.get("keys") {
+        Some(Value::Array(a)) => a,
+        Some(Value::String(s)) => {
+            single = vec![Value::String(s.clone())];
+            &single
+        }
+        _ => {
+            return Err(bad(
+                "'keys' is required: an array of chords like [\"Ctrl+S\"]",
+            ))
+        }
+    };
     if list.is_empty() || list.len() > 100 {
         return Err(bad("'keys' needs 1..100 chords"));
     }

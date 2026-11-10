@@ -220,6 +220,8 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                 "stopped": crate::safety::stopped(),
                 "kill_hotkey": crate::safety::hotkey_name(),
                 "admin_helper": crate::helper::status_json(),
+                // P6-M4 (ADR 0047): an owned dialog of the foreground window, or null.
+                "dialog": crate::winmgr::foreground_dialog(),
             }),
             method,
         ),

@@ -27,10 +27,10 @@ export type ToolDef = {
 const int = (description: string) => ({ type: 'integer', description });
 const WINDOW = {
   type: ['string', 'integer'],
-  description: 'Window ref from list_windows (e.g. "w460650") or its integer handle, or "desktop" for the desktop icon view. Mouse: optional guard (point must be inside it). Keyboard: required and must be the foreground window.',
+  description: 'Window: ref from list_windows ("w460650"), part of its title, a process name ("chrome"), or "desktop" (icon view). Mouse: optional guard (point must be inside). Keyboard: required, must be the foreground window.',
 };
 const FOCUS = { type: 'boolean', description: 'Bring the window to the front first (like focus_window), default false' };
-const WINDOW_REQ = { type: ['string', 'integer'], description: 'Window ref from list_windows (e.g. "w460650") or its integer handle, or "desktop" for the desktop icon view' };
+const WINDOW_REQ = { type: ['string', 'integer'], description: 'Window: ref from list_windows ("w460650"), part of its title, a process name ("chrome"), or "desktop" (icon view)' };
 
 type Win = { ref: string; process: string; title: string; x: number; y: number; w: number; h: number; state: string; focused: boolean; elevated: boolean; agent?: boolean; reused?: boolean };
 /** One compact line per window (docs/06 token budget). */
@@ -60,7 +60,7 @@ export const TOOLS: ToolDef[] = [
     name: 'status',
     description:
       'Shows whether the XtraOS core is running and paired: version, session, state (running / stopped by the ' +
-      'user) and the kill-switch hotkey. Call this first; if it fails, ask the user to start the XtraOS core. ' +
+      'user), kill-switch hotkey, `dialog` (front window\'s message box). Call this first; if it fails, ask the user to start the XtraOS core. ' +
       'If stopped: stop entirely — only the user can resume, from the XtraOS tray icon.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run(core) {
@@ -119,7 +119,7 @@ export const TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         window: WINDOW,
-        keys: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100, description: 'Chords, pressed in order' },
+        keys: { type: ['array', 'string'], items: { type: 'string' }, minItems: 1, maxItems: 100, description: 'Chords, pressed in order, e.g. ["Ctrl+S"]; one chord may be a plain string' },
         focus: FOCUS,
         idle_ms: IDLE, timeout_ms: TIMEOUT,
       },
@@ -197,15 +197,17 @@ export const TOOLS: ToolDef[] = [
       'Reads a window as compact lines with element refs: `e5 Button "Save"`, `e7 Edit "Search" = "text"`, ' +
       '`[x]` checked, `(off)` disabled, `***` password (never revealed). Default: the foreground window. A repeat ' +
       'call on the same window returns only what changed (+ added, - removed, ~ changed) unless full=true. ' +
-      '`opaque` = few accessible elements (canvas/game): use screenshot. Refs work in click, scroll, drag, set_value.',
+      'A first `!! dialog` line = alert/message box and its buttons: answer it first. ' +
+      '`opaque` (canvas/game): use screenshot. Refs work in click, scroll, drag, set_value.',
     inputSchema: {
       type: 'object',
       properties: {
         window: WINDOW_REQ,
-        scope_ref: { ...REF, description: 'Only this element\'s subtree (a list, pane or dialog): fewer tokens on big windows' },
+        scope_ref: { ...REF, description: 'Only this element\'s subtree (list, pane, dialog)' },
         full: { type: 'boolean', description: 'Full list instead of a diff' },
-        bounds: { type: 'boolean', description: 'Also each element\'s screen place: @cx,cy (x,y wxh) (full list)' },
+        bounds: { type: 'boolean', description: 'Also each element\'s screen place @cx,cy (x,y wxh)' },
         max_elements: { type: 'integer', minimum: 1, maximum: 500, description: 'Default 120' },
+        reveal: { type: 'boolean', description: 'Minimized browser/Electron app: show briefly (no focus) to read its page' },
       },
       additionalProperties: false,
     },
@@ -482,9 +484,17 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'focus_window',
-    description: 'Brings a window to the front (restores it if minimised). NEEDS_HUMAN if Windows refuses.',
-    inputSchema: { type: 'object', properties: { window: WINDOW_REQ }, required: ['window'], additionalProperties: false },
-    run: forward('focus_window', (r) => `ok focused ${r.ref}`),
+    description: 'Brings a window to the front (restores it if minimised), then checks it stayed there; if not, the result names the window in front. NEEDS_HUMAN if Windows refuses.',
+    inputSchema: {
+      type: 'object',
+      properties: { window: WINDOW_REQ, verify_ms: { type: 'integer', minimum: 0, maximum: 2000, description: 'Check again after ms (default 300, 0 = off)' } },
+      required: ['window'],
+      additionalProperties: false,
+    },
+    run: forward('focus_window', (r) =>
+      r.focused
+        ? `ok focused ${r.ref}`
+        : `NOT in front: ${r.ref} lost the foreground${r.taken_by ? ` to ${r.taken_by.ref} ${r.taken_by.process} "${String(r.taken_by.title).slice(0, 60)}"` : ''}. Retry, or ask the user to click the window.`),
   },
   {
     name: 'launch_app',
@@ -775,3 +785,33 @@ export const TOOLS: ToolDef[] = [
     run: forward('clipboard', (r, a) => (a.op === 'get' ? (r.text ?? '(no text on clipboard)') : `ok clipboard set (${r.chars} chars)`)),
   },
 ];
+
+/** P5-M7 (ADR 0044): the `core` profile lists these 15 everyday tools (~3,400 tokens instead
+ * of ~8,500). A profile only shortens tools/list; every tool stays callable and policy-checked. */
+export const CORE_TOOLS = ['status', 'list_windows', 'launch_app', 'focus_window', 'observe', 'find', 'read_text', 'screenshot', 'click', 'type', 'press_keys', 'scroll', 'wait_for', 'list_skills', 'run_skill'];
+
+export type Profile = 'full' | 'core';
+
+/** `XTRAOS_TOOLS` → profile; an unknown value falls back to `full` (with `warning` set). */
+export function profileFrom(value: string | undefined): { profile: Profile; warning?: string } {
+  const v = (value ?? '').trim().toLowerCase();
+  if (v === '' || v === 'full') return { profile: 'full' };
+  if (v === 'core') return { profile: 'core' };
+  return { profile: 'full', warning: `unknown XTRAOS_TOOLS '${value}' (use core or full); listing all tools` };
+}
+
+export const listedTools = (profile: Profile): ToolDef[] =>
+  profile === 'core' ? TOOLS.filter((t) => CORE_TOOLS.includes(t.name)) : TOOLS;
+
+/** P5-M7 (ADR 0044): sent once in the MCP `initialize` result. A how-to; adds no capability. */
+export const INSTRUCTIONS = [
+  'XtraOS Agent lets you see and operate this Windows PC. It reads apps through UI Automation, so prefer text over pixels.',
+  'How to work:',
+  '1. Get a window: list_windows, or launch_app (returns its ref, e.g. "w460650").',
+  '2. observe it: you get elements with refs like "e12". Repeat observe returns only what changed; pass full:true for the whole list.',
+  '3. Act on refs: click and scroll with a ref work in the background (no cursor, no focus change). type and press_keys need the window in front: pass focus:true.',
+  '4. Use find, read_text and wait_for instead of screenshots; use screenshot only when observe says the window is opaque.',
+  '5. run_skill does common jobs in one call (list_skills shows them, e.g. files.find).',
+  'Errors: STALE_REF → observe again. USER_ACTIVE → the user is using the mouse or keyboard; retry later. NEEDS_HUMAN / BLOCKED_BY_POLICY → the user must act or has not allowed it; tell them, do not work around it. STOPPED → the user pressed the kill switch (Ctrl+Alt+Esc); only they can resume.',
+  'Sending messages, deleting files and changing settings show the user an approval dialog. Passwords and payments are never typed by you.',
+].join('\n');

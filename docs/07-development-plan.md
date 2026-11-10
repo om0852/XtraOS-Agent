@@ -1,6 +1,6 @@
 # 07 — Development Plan
 
-**Current phase: Phase 3 — Reach** (Phases 0–2 built; see the status lines under each phase). Phase 0 closed by ADR 0007 (gate 10 PASS /
+**Current phase: Phase 6 — Reliable daily driver** (ADR 0046; Phase 5 partly open, see below; ADR 0044, plan in `docs/09-next-phases-plan.md`; Phases 0–2 built, Phases 3–4 built except macOS, Linux, team policies and the skill registry; see the status lines under each phase). Phase 0 closed by ADR 0007 (gate 10 PASS /
 0 FAIL / 1 SKIP). Toolchain installed and pinned (ADR 0008).
 **M1 Core + IPC: closed** (ADR 0009) — gate 6/6 PASS twice from a clean build
 (`tests/phase1/m1-gate.ps1`). Smart App Control turned off by the owner on this dev machine.
@@ -103,6 +103,35 @@ multi-finger gestures, recording/replay, macOS platform (CGEvent, AX, ScreenCapt
 policies (needs an org model from the owner), skill registry (later, with connectors/plugins).
 
 Linux (AT-SPI, libei/portals), SDKs (Node/Python), team policies + audit export, skill registry.
+
+## Phase 5 — Connect anywhere
+
+Goal: easy to install, and usable from any AI tool (IDE agents, Hermes Agent, OpenClaw).
+Milestones and what each needs from the owner: ADR 0044. Later phases (6 reliable daily
+driver, 7 everyday work, 8 many agents): `docs/09-next-phases-plan.md`.
+**P5-M7 lean tool surface: built** (ADR 0044) — server instructions; `XTRAOS_TOOLS=core`
+lists 15 tools (~3,400 tokens instead of ~8,500).
+**P5-M3 `xtraos setup` / `xtraos doctor`: built** (ADR 0045) — dry run by default, backs up each
+config, 9 clients incl. Hermes Agent; tests SU-01..SU-12 pass; the live check of each client is open (P5-M9).
+Open: P5-M1 release, P5-M2 signing, P5-M4 registries, P5-M5 WSL, P5-M6 skill package, P5-M8 (owner decision), P5-M9.
+
+## Phase 6 — Reliable daily driver
+
+Goal: it works the same way every time; every item comes from a real failure
+(`docs/09-next-phases-plan.md` §2). Scope: ADR 0046.
+**P6-M1 window targeting, P6-M2 focus truth, P6-M3 clearer argument errors: built** (ADR 0046)
+— `window` accepts a title part or process name; a reused handle is `STALE_REF`;
+`focus_window` reports whether the window stayed in front; `INVALID_ARGS` carries an example.
+Unit tests + interactive `win06` pass.
+**P6-M4 dialog awareness: built** (ADR 0047) — `observe` puts a `!! dialog` line (browser alert
+inside the window, or an owned message box) right after the header with its button refs;
+`status.dialog` names a message box of the front window. Interactive `p6m4_e2e` (testbed
+message box; Edge alert with `XTRAOS_TEST_BROWSERS=1`) passes.
+**P6-M5 browser/Electron page content: built** (ADR 0048) — the first read of a Chrome, Edge or
+Electron window waits (≤ 1.5 s) for its page instead of returning only the browser frame;
+`observe {reveal:true}` reads a minimized one without a focus change; `page` says why a page is
+missing. Interactive `p6m5_e2e` (Edge + Chrome) passes. Open: P6-M6 work beside the user v2, P6-M7 `wait`/`notify`, P6-M8 large
+lists, P6-M9 open human-run gates.
 
 ## Working agreement
 

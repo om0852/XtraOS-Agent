@@ -24,7 +24,7 @@ const t0 = Date.now();
 ps(['-Command', `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${tmp}\\x' -Force`]);
 const bundle = path.join(tmp, 'x', fs.readdirSync(path.join(tmp, 'x'))[0]);
 const out = ps(['-File', path.join(bundle, 'install.ps1'), '-Prefix', prefix, '-StartAtLogin', '-RunValueName', runValue]);
-check('install.ps1 copies the bundle', fs.existsSync(path.join(prefix, 'bin', 'xtraos-core.exe')) && fs.existsSync(path.join(prefix, 'xtraos-mcp.cmd')));
+check('install.ps1 copies the bundle', fs.existsSync(path.join(prefix, 'bin', 'xtraos-core.exe')) && fs.existsSync(path.join(prefix, 'xtraos-mcp.cmd')) && fs.existsSync(path.join(prefix, 'xtraos.cmd')));
 check('installer prints the MCP config', out.includes('claude mcp add') && out.includes('mcpServers'));
 const runKey = ps(['-Command', `(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name ${runValue} -ErrorAction SilentlyContinue).${runValue}`]).trim();
 check('-StartAtLogin writes the login entry', runKey.includes(path.join(prefix, 'bin', 'xtraos-core.exe')), runKey);

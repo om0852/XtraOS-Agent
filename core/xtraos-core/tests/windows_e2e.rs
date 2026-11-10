@@ -269,3 +269,59 @@ async fn win05_flow_f3_chrome_then_firefox() {
     .await;
     core.stop().await;
 }
+
+// P6-M1a / P6-M2 (ADR 0046): `window` by text, the ambiguous case, and the focus result.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "interactive: opens two testbed windows, focuses and closes them"]
+async fn win06_window_by_text_and_focus_truth() {
+    let _s = SERIAL.lock().await;
+    let mut core = Core::start().await;
+    let launch =
+        json!({"app": testbed_exe(), "args": ["300", "200"], "timeout_ms": 15000, "reuse": false});
+    let a = core.ok("launch_app", launch.clone()).await;
+    let _ca = EndTestbedOnDrop(a["pid"].as_u64().unwrap());
+    let ra = a["ref"].as_str().unwrap().to_string();
+
+    // One testbed window: part of the title (any case) and the process name both find it.
+    let b1 = core
+        .ok("window_bounds", json!({"window": "xtraos test"}))
+        .await;
+    assert_eq!(b1["ref"], ra, "{b1}");
+    let b2 = core
+        .ok("window_bounds", json!({"window": "testbed.exe"}))
+        .await;
+    assert_eq!(b2["ref"], ra, "{b2}");
+    let b3 = core.ok("window_bounds", json!({"window": "testbed"})).await;
+    assert_eq!(b3["ref"], ra, "process name without .exe: {b3}");
+
+    // focus_window by text reports the truth: it is in front 300 ms later.
+    let f = core
+        .ok("focus_window", json!({"window": "XtraOS Testbed"}))
+        .await;
+    assert_eq!(f["ref"], ra, "{f}");
+    assert_eq!(f["focused"], true, "{f}");
+
+    // A second testbed window: the same text is now ambiguous and nothing is chosen.
+    let b = core.ok("launch_app", launch).await;
+    let _cb = EndTestbedOnDrop(b["pid"].as_u64().unwrap());
+    let rb = b["ref"].as_str().unwrap().to_string();
+    assert_ne!(ra, rb);
+    let e = core
+        .call("window_bounds", json!({"window": "XtraOS Testbed"}))
+        .await;
+    assert_eq!(code(&e), "INVALID_ARGS", "{e}");
+    let msg = e.to_string();
+    assert!(
+        msg.contains(&ra) && msg.contains(&rb),
+        "both candidates are named: {msg}"
+    );
+
+    // Unknown text is "not found"; refs keep working.
+    let e = core
+        .call("window_bounds", json!({"window": "no-such-window-xyz"}))
+        .await;
+    assert_eq!(code(&e), "WINDOW_NOT_FOUND", "{e}");
+    core.ok("close_window", json!({"window": ra})).await;
+    core.ok("close_window", json!({"window": rb})).await;
+    core.stop().await;
+}

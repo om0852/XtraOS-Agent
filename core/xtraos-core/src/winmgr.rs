@@ -12,8 +12,9 @@
 // Win32, which validates them (IsWindow). So taking them in safe public fns is sound.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -108,6 +109,8 @@ extern "system" {
     fn AttachThreadInput(a: u32, b: u32, attach: BOOL) -> BOOL;
     fn PostMessageW(h: HWND, msg: u32, w: usize, l: isize) -> BOOL;
     fn FindWindowExW(parent: HWND, after: HWND, class: *const u16, title: *const u16) -> HWND;
+    fn GetClassNameW(h: HWND, buf: *mut u16, n: i32) -> i32;
+    fn IsWindowEnabled(h: HWND) -> BOOL;
 }
 
 #[link(name = "dwmapi")]
@@ -175,8 +178,139 @@ pub fn elevation_required(what: &str) -> ActError {
 // ---------------------------------------------------------------------------------------------
 // Window refs
 
+/// The ref handed to the agent. Handing it out also remembers which process instance owns the
+/// window, so a later use can tell when Windows gave the handle to another app (P6-M1b).
 pub fn window_ref(h: HWND) -> String {
+    remember(h);
     format!("w{}", h as usize)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reused handles (P6-M1b, ADR 0046): Windows recycles window handles. A ref that outlives its
+// window can silently point at another app's window. (pid, process start time) identifies one
+// process instance (as in ADR 0041).
+
+type Identity = (u32, u64);
+
+static HANDED_OUT: Mutex<Option<HashMap<usize, Identity>>> = Mutex::new(None);
+
+fn identity(h: HWND) -> Option<Identity> {
+    if h.is_null() || unsafe { IsWindow(h) } == 0 {
+        return None;
+    }
+    let pid = pid_of(h);
+    (pid != 0).then(|| (pid, process_start_time(pid).unwrap_or(0)))
+}
+
+fn remember(h: HWND) {
+    let Some(id) = identity(h) else { return };
+    let mut guard = HANDED_OUT.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    if map.len() > 4096 {
+        map.retain(|&k, _| unsafe { IsWindow(k as HWND) } != 0);
+    }
+    map.insert(h as usize, id);
+}
+
+/// Pure: a handle never handed out is accepted; a remembered one must be the same instance.
+fn same_instance(remembered: Option<Identity>, now: Identity) -> bool {
+    remembered.is_none_or(|r| r == now)
+}
+
+fn check_not_reused(h: HWND) -> Result<(), ActError> {
+    let Some(now) = identity(h) else {
+        return Ok(());
+    };
+    let remembered = HANDED_OUT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(&(h as usize)).copied());
+    if same_instance(remembered, now) {
+        return Ok(());
+    }
+    // No window_ref() here: it would remember the new owner and hide the reuse.
+    let mut t = title(h);
+    if t.chars().count() > 60 {
+        t = t.chars().take(59).collect::<String>() + "…";
+    }
+    Err(err(
+        "STALE_REF",
+        format!(
+            "the window of w{} closed; its handle now belongs to {} \"{}\"",
+            h as usize,
+            process_name(now.0),
+            t
+        ),
+        "Call list_windows and use the new ref.",
+    ))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Window by text (P6-M1a, ADR 0046)
+
+/// Pure matcher: indexes of `(title, process)` candidates that match `text`. An exact title
+/// wins; otherwise the title contains the text or the process name equals it (with or without
+/// `.exe`). Case-insensitive.
+pub fn match_windows(text: &str, candidates: &[(String, String)]) -> Vec<usize> {
+    let t = text.trim().to_lowercase();
+    if t.is_empty() {
+        return Vec::new();
+    }
+    let lower: Vec<(String, String)> = candidates
+        .iter()
+        .map(|(title, process)| (title.to_lowercase(), process.to_lowercase()))
+        .collect();
+    let exact: Vec<usize> = (0..lower.len()).filter(|&i| lower[i].0 == t).collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+    (0..lower.len())
+        .filter(|&i| {
+            let (title, process) = &lower[i];
+            title.contains(&t) || *process == t || process.strip_suffix(".exe") == Some(t.as_str())
+        })
+        .collect()
+}
+
+fn resolve_by_text(text: &str) -> Result<HWND, ActError> {
+    let windows: Vec<HWND> = listable_windows()
+        .into_iter()
+        .filter(|&h| !crate::safety::is_own_window(h))
+        .collect();
+    let candidates: Vec<(String, String)> = windows
+        .iter()
+        .map(|&h| (title(h), process_name(pid_of(h))))
+        .collect();
+    let hits = match_windows(text, &candidates);
+    match hits.len() {
+        0 => Err(err(
+            "WINDOW_NOT_FOUND",
+            format!("no window matches \"{}\"", text.trim()),
+            "Call list_windows; pass a ref, part of a title, or a process name like \"chrome\".",
+        )),
+        1 => Ok(windows[hits[0]]),
+        n => {
+            let list: Vec<String> = hits
+                .iter()
+                .take(5)
+                .map(|&i| {
+                    let t: String = candidates[i].0.chars().take(50).collect();
+                    format!("{} \"{}\"", window_ref(windows[i]), t)
+                })
+                .collect();
+            Err(err(
+                "INVALID_ARGS",
+                format!(
+                    "'window' \"{}\" matches {n} windows: {}{}",
+                    text.trim(),
+                    list.join(", "),
+                    if n > 5 { ", …" } else { "" }
+                ),
+                "Pass the ref of the window you mean, or a longer part of its title.",
+            ))
+        }
+    }
 }
 
 /// Parses `"w123"` or `123` (pure; no OS calls).
@@ -224,17 +358,27 @@ pub fn resolve_window(v: &Value) -> Result<HWND, ActError> {
             )
         });
     }
-    let n = parse_ref(v).ok_or_else(|| {
-        bad("window must be a ref like \"w123\", a handle integer, or \"desktop\"")
-    })?;
+    let n = match parse_ref(v) {
+        Some(n) => n,
+        // P6-M1a: part of a title, or a process name.
+        None => match v.as_str() {
+            Some(text) if !text.trim().is_empty() => return resolve_by_text(text),
+            _ => {
+                return Err(bad(
+                    "window must be a ref like \"w123\", part of a title, a process name, or \"desktop\"",
+                ))
+            }
+        },
+    };
     let h = n as HWND;
     if unsafe { IsWindow(h) } == 0 {
         return Err(err(
             "WINDOW_NOT_FOUND",
-            format!("no window {}", window_ref(h)),
+            format!("no window w{n}"),
             "It may have closed. Call list_windows.",
         ));
     }
+    check_not_reused(h)?;
     let root = unsafe { GetAncestor(h, GA_ROOT) };
     if crate::safety::is_own_window(root) {
         return Err(crate::safety::blocked(
@@ -556,6 +700,123 @@ fn describe(h: HWND, fg: HWND) -> Value {
     })
 }
 
+// ---------------------------------------------------------------------------------------------
+// Owned dialogs (P6-M4, ADR 0047): a message box is a separate top-level window owned by the
+// app window, so list_windows and the app's UIA tree never show it.
+
+/// Chrome, Edge and Electron apps (P6-M5, ADR 0048).
+pub fn is_chromium_class(class: &str) -> bool {
+    class.starts_with("Chrome_WidgetWin_")
+}
+
+pub fn is_chromium(h: HWND) -> bool {
+    is_chromium_class(&class_name(h))
+}
+
+/// Shows a minimized window without activating it; minimizes it again (without activating)
+/// when dropped, also on early returns (observe reveal, ADR 0048).
+pub struct Revealed(HWND);
+
+pub fn reveal_no_activate(h: HWND) -> Revealed {
+    const SW_SHOWNOACTIVATE: i32 = 4;
+    unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
+    Revealed(h)
+}
+
+impl Drop for Revealed {
+    fn drop(&mut self) {
+        const SW_SHOWMINNOACTIVE: i32 = 7;
+        unsafe { ShowWindow(self.0, SW_SHOWMINNOACTIVE) };
+    }
+}
+
+pub fn class_name(h: HWND) -> String {
+    let mut buf = [0u16; 256];
+    let n = unsafe { GetClassNameW(h, buf.as_mut_ptr(), buf.len() as i32) };
+    String::from_utf16_lossy(&buf[..n.max(0) as usize])
+}
+
+pub fn owner(h: HWND) -> HWND {
+    unsafe { GetWindow(h, GW_OWNER) }
+}
+
+pub fn is_enabled(h: HWND) -> bool {
+    unsafe { IsWindowEnabled(h) != 0 }
+}
+
+/// Pure rule: an owned window is a dialog when it is a standard dialog (`#32770`) or its owner
+/// is disabled (a modal is open). Tooltips and menus are neither.
+pub fn counts_as_dialog(class: &str, owner_disabled: bool) -> bool {
+    class == "#32770" || owner_disabled
+}
+
+/// `h` owns `d`, directly or through a chain of owners (at most 8 steps).
+fn owned_by(d: HWND, h: HWND) -> bool {
+    let mut o = owner(d);
+    for _ in 0..8 {
+        if o.is_null() {
+            return false;
+        }
+        if o == h {
+            return true;
+        }
+        o = owner(o);
+    }
+    false
+}
+
+unsafe extern "system" fn collect_visible(h: HWND, lparam: isize) -> BOOL {
+    let v = &mut *(lparam as *mut Vec<HWND>);
+    if IsWindowVisible(h) != 0 && !cloaked(h) {
+        v.push(h);
+    }
+    1
+}
+
+/// The front-most dialog owned by `h` and whether it blocks `h` (owner disabled). XtraOS's own
+/// windows never count.
+pub fn owned_dialog(h: HWND) -> Option<(HWND, bool)> {
+    let mut v: Vec<HWND> = Vec::new();
+    unsafe { EnumWindows(collect_visible, (&mut v as *mut Vec<HWND>) as isize) };
+    let blocked = !is_enabled(h);
+    v.into_iter()
+        .find(|&d| {
+            d != h
+                && owned_by(d, h)
+                && !crate::safety::is_own_window(d)
+                && counts_as_dialog(&class_name(d), !is_enabled(owner(d)))
+        })
+        .map(|d| (d, blocked))
+}
+
+/// `h` is itself an owned dialog: its owner's ref.
+pub fn dialog_owner(h: HWND) -> Option<HWND> {
+    let o = owner(h);
+    (!o.is_null() && counts_as_dialog(&class_name(h), !is_enabled(o))).then_some(o)
+}
+
+/// `status.dialog`: the foreground window's dialog, or the foreground window when it is one.
+pub fn foreground_dialog() -> Value {
+    let fg = foreground_root();
+    if fg.is_null() || crate::safety::is_own_window(fg) {
+        return Value::Null;
+    }
+    let (d, o, blocking) = if let Some(o) = dialog_owner(fg) {
+        (fg, o, !is_enabled(o))
+    } else if let Some((d, b)) = owned_dialog(fg) {
+        (d, fg, b)
+    } else {
+        return Value::Null;
+    };
+    json!({
+        "window": window_ref(d),
+        "title": title(d),
+        "process": process_name(pid_of(d)),
+        "owner": window_ref(o),
+        "blocking": blocking,
+    })
+}
+
 pub fn foreground_root() -> HWND {
     let fg = unsafe { GetForegroundWindow() };
     if fg.is_null() {
@@ -663,6 +924,7 @@ pub fn focus(h: HWND) -> bool {
 
 fn focus_window(p: &Value) -> Result<Value, ActError> {
     let h = window_param(p)?;
+    let verify_ms = opt_u64(p, "verify_ms", 300, 2000)?;
     if !focus(h) {
         return Err(err(
             "NEEDS_HUMAN",
@@ -673,7 +935,20 @@ fn focus_window(p: &Value) -> Result<Value, ActError> {
             "Ask the user to click the window once, then retry.",
         ));
     }
-    Ok(json!({"ref": window_ref(h), "focused": true}))
+    // P6-M2 (ADR 0046): look again a moment later; another window may have taken the front.
+    if verify_ms > 0 {
+        sleep(Duration::from_millis(verify_ms));
+    }
+    let fg = foreground_root();
+    if fg == h {
+        return Ok(json!({"ref": window_ref(h), "focused": true}));
+    }
+    let taken_by = if fg.is_null() {
+        Value::Null
+    } else {
+        json!({"ref": window_ref(fg), "process": process_name(pid_of(fg)), "title": title(fg)})
+    };
+    Ok(json!({"ref": window_ref(h), "focused": false, "taken_by": taken_by}))
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -1056,6 +1331,97 @@ mod tests {
         assert_eq!(window_ref(460650usize as HWND), "w460650");
     }
 
+    // P6-M1a (ADR 0046): `window` by text.
+    #[test]
+    fn windows_match_by_title_or_process() {
+        let c = |t: &str, p: &str| (t.to_string(), p.to_string());
+        let wins = vec![
+            c("Inbox - Gmail - Google Chrome", "chrome.exe"),
+            c("Untitled - Notepad", "notepad.exe"),
+            c("Notepad", "notepad.exe"),
+            c("Downloads - File Explorer", "explorer.exe"),
+        ];
+        assert_eq!(
+            match_windows("gmail", &wins),
+            vec![0],
+            "part of a title, any case"
+        );
+        assert_eq!(
+            match_windows("Notepad", &wins),
+            vec![2],
+            "an exact title wins"
+        );
+        assert_eq!(match_windows("untitled", &wins), vec![1]);
+        assert_eq!(
+            match_windows("notepad.exe", &wins),
+            vec![1, 2],
+            "process name"
+        );
+        assert_eq!(
+            match_windows("explorer", &wins),
+            vec![3],
+            "process without .exe (and the title)"
+        );
+        assert_eq!(match_windows("chrome", &wins), vec![0]);
+        assert!(match_windows("firefox", &wins).is_empty());
+        assert!(
+            match_windows("   ", &wins).is_empty(),
+            "blank text matches nothing"
+        );
+    }
+
+    // P6-M5 (ADR 0048): which windows get the Chromium page wait.
+    #[test]
+    fn chromium_windows_by_class() {
+        assert!(is_chromium_class("Chrome_WidgetWin_1"));
+        assert!(is_chromium_class("Chrome_WidgetWin_0"));
+        assert!(!is_chromium_class("Notepad"));
+        assert!(!is_chromium_class("MozillaWindowClass"));
+    }
+
+    // P6-M4 (ADR 0047): which owned windows are dialogs.
+    #[test]
+    fn owned_dialog_rule() {
+        assert!(counts_as_dialog("#32770", false)); // message box, find dialog
+        assert!(counts_as_dialog("SomeAppDialog", true)); // custom modal: owner disabled
+        assert!(!counts_as_dialog("tooltips_class32", false));
+        assert!(!counts_as_dialog("#32768", false)); // menu
+    }
+
+    // P6-M1b (ADR 0046): the session failure: a handle reused by another app.
+    #[test]
+    fn a_reused_handle_is_detected() {
+        let chrome = (4321u32, 1000u64);
+        assert!(
+            same_instance(None, chrome),
+            "a handle never handed out is accepted"
+        );
+        assert!(same_instance(Some(chrome), chrome));
+        assert!(
+            !same_instance(Some(chrome), (9876, 2000)),
+            "another process"
+        );
+        assert!(
+            !same_instance(Some(chrome), (4321, 5000)),
+            "same pid, a later process"
+        );
+    }
+
+    #[test]
+    fn window_text_errors_are_clear() {
+        let e = resolve_window(&json!("no-such-window-title-xyz")).unwrap_err();
+        assert_eq!(e.code, "WINDOW_NOT_FOUND");
+        assert!(e.message.contains("no-such-window-title-xyz"));
+        assert_eq!(
+            resolve_window(&json!("  ")).unwrap_err().code,
+            "INVALID_ARGS"
+        );
+        assert_eq!(
+            resolve_window(&json!(true)).unwrap_err().code,
+            "INVALID_ARGS"
+        );
+    }
+
     #[test]
     fn app_names_normalise() {
         assert_eq!(normalise_app("chrome"), "chrome.exe");
@@ -1096,8 +1462,16 @@ mod tests {
             run("launch_app", &json!({"app": ""})).unwrap_err().code,
             "INVALID_ARGS"
         );
+        // P6-M1a (ADR 0046): text is a title / process search now, so an unknown name is
+        // "not found"; only a wrong type is a bad argument.
         assert_eq!(
-            run("window_bounds", &json!({"window": "nope"}))
+            run("window_bounds", &json!({"window": "nope-no-such-window"}))
+                .unwrap_err()
+                .code,
+            "WINDOW_NOT_FOUND"
+        );
+        assert_eq!(
+            run("window_bounds", &json!({"window": true}))
                 .unwrap_err()
                 .code,
             "INVALID_ARGS"

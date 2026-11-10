@@ -46,13 +46,19 @@ Visual Studio C++ Build Tools and Node.js 24. The built bundle carries its own N
 2. Install it (per user, no admin rights):
    ```powershell
    cd dist\xtraos-0.1.0-win-x64
-   powershell -ExecutionPolicy Bypass -File install.ps1 -ConfigureClaudeCode
+   powershell -ExecutionPolicy Bypass -File install.ps1
    ```
-   `-ConfigureClaudeCode` registers it with Claude Code; for other
-   MCP clients (Claude Desktop, Cursor, …) add the config the installer prints, e.g.
+   Then connect your AI tools. `xtraos setup` shows the entry it would add for each client
+   it finds (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Cline, Codex CLI,
+   Gemini CLI, Hermes Agent) and changes nothing until you add `--apply`; each config is backed up first:
+   ```powershell
+   $x = "$env:LOCALAPPDATA\Programs\XtraOS\xtraos.cmd"
+   & $x setup            # dry run: shows what it would change
+   & $x setup --apply    # writes it (add --tools core for a smaller tool list)
+   & $x doctor           # checks the install and each client
    ```
-   claude mcp add --scope user xtraos -- "%LOCALAPPDATA%\Programs\XtraOS\xtraos-mcp.cmd"
-   ```
+   The config formats are covered by automated tests; a recorded live run per client is
+   still open.
 3. Ask your agent something:
    - *"My desktop is a mess. Arrange the icons in a circle."*
    - *"Open my GitHub and LinkedIn side by side."*
@@ -81,6 +87,9 @@ Uninstall: `%LOCALAPPDATA%\Programs\XtraOS\uninstall.ps1` (`-Purge` also removes
 | Files and routines | skills: `files.list/find/open/mkdir/copy/move/rename/delete`, macro skills, `record_session` → replayable skill |
 | Human in the loop | `ask_human`, `wait_for_human`, approval dialogs, kill switch, `status` |
 | More | `sandbox` (a disposable Windows Sandbox desktop), `elevated_helper` (admin apps via UAC), `browser` (via the XtraDevPilot extension), `system`, `volume`, `audit_export` |
+
+Small context window? Set the environment variable `XTRAOS_TOOLS=core` for the MCP server: it
+lists 15 everyday tools (~3,400 tokens instead of ~8,500); the rest stay callable.
 
 The full contract is in [docs/04-mcp-tool-contract.md](docs/04-mcp-tool-contract.md). SDKs:
 [`sdk/node`](sdk/node) and [`sdk/python`](sdk/python).

@@ -9,7 +9,16 @@ an update here first. Status: `P1` = Phase 1, `P2` = Phase 2, `P3` = Phase 3.
   ref) + `x,y` with `space: "window" | "screen"` (physical pixels, per-monitor aware).
 - Outputs are compact text, not pretty JSON. Every result ends with a one-line status.
 - Every tool accepts optional `timeout_ms`.
-- Errors: `{ code, message, hint }` with codes from the list below.
+- Errors: `{ code, message, hint }` with codes from the list below. The hint of an `INVALID_ARGS`
+  is one correct example call for that tool (P6-M3).
+
+## Profiles and instructions (P5-M7, ADR 0044)
+
+- `initialize` returns server `instructions`: a short how-to for the model.
+- `XTRAOS_TOOLS=full` (default) lists every tool. `XTRAOS_TOOLS=core` lists 15: status,
+  list_windows, launch_app, focus_window, observe, find, read_text, screenshot, click, type,
+  press_keys, scroll, wait_for, list_skills, run_skill. A profile only shortens the list; every
+  tool stays callable and policy-checked.
 
 ## Error codes
 
@@ -25,7 +34,7 @@ USER_ACTIVE` (user held a button/modifier or moved the mouse — action aborted,
 
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
-| `observe` | `window?` (default foreground), `scope_ref?` (one element's subtree, P2-M1), `full?`, `bounds?` (each line + `@cx,cy (x,y wxh)` screen place; full list), `max_elements?` (default 120) | element lines with refs, or a diff (`+`/`-`/`~`) on repeat; `opaque` flag | P1 (M4) |
+| `observe` | `window?` (default foreground), `scope_ref?` (one element's subtree, P2-M1), `full?`, `bounds?` (each line + `@cx,cy (x,y wxh)` screen place; full list), `max_elements?` (default 120), `reveal?` (P6-M5, ADR 0048: a minimized Chrome/Edge/Electron window with no page tree is shown for a moment with `SW_SHOWNOACTIVATE`, read, and minimized again; focus unchanged) | element lines with refs, or a diff (`+`/`-`/`~`) on repeat; `opaque` flag. P6-M4 (ADR 0047): a dialog of the window (in-page `IsDialog` element such as a browser alert, or an owned `#32770`/modal window) is the line after the header, in the list and in a diff: `!! dialog <ref> "title" (blocking): "message" — buttons: e46 "OK"…`; result `dialog: {ref, title, text, buttons[{ref,name}], kind: in_page\|window, blocking}` or `null`; header ends `dialog of wN` when the window is itself a dialog. P6-M5: on a Chromium window with no `Document` yet, `observe`/`find`/`read_text` read again for ≤ 1.5 s (`waited_ms`); `page: "minimized"\|"not_exposed"\|null` and a footer note say why a page is missing; `revealed: true` when `reveal` acted | P1 (M4), P6-M4, P6-M5 |
 | `screenshot` | `window?` or `region?` `{x,y,w,h}`, `scale?` (default 0.5, 0.1–1) | PNG + mapping `screen = origin + px/scale` | P1 (M4) |
 | `read_text` | `window` or `ref`, `last_lines?` | text (UIA TextPattern / Value / Name); never password values | P1 (M4) |
 | `find` | `query` (name/role/automation-id substring), `window?`, `deep?` (virtualised list rows via ItemContainerPattern; exact name fast, partial scan ≤ `timeout_ms`, default 3000, max 15000) | matching refs (≤ 20); off-screen rows marked `(offscreen)`, virtualised ones `(virtualized: realized when used)`; `click(ref)` on a row selects (never opens) | P1 (M4), deep P2 (M7) |
@@ -34,11 +43,14 @@ USER_ACTIVE` (user held a button/modifier or moved the mouse — action aborted,
 ## Windows & apps
 
 M3 (ADR 0012): a window is referenced as `w<handle>` (e.g. `w460650`) or the integer handle.
+P6-M1 (ADR 0046): `window` also accepts text: part of a title or a process name (`"chrome"`),
+case-insensitive, exact title first; one match is used, none is `WINDOW_NOT_FOUND`, several are
+`INVALID_ARGS` listing the candidates. A ref whose handle Windows gave to another app is `STALE_REF`.
 
 | Tool | Args | Returns | Phase |
 |---|---|---|---|
 | `list_windows` | `filter?` (substring of title or process) | `w460650 chrome.exe "Google - Chrome" 0,0 1920x1040 focused` lines; `agent` = opened by the agent (P2-M4) | P1 (M3) |
-| `focus_window` | `window` | ok (else `NEEDS_HUMAN`) | P1 (M3) |
+| `focus_window` | `window`, `verify_ms?` (default 300, 0 = off, max 2000) | `focused` true/false after `verify_ms`; when another window took the front: `taken_by` {ref, process, title} (else `NEEDS_HUMAN`) | P1 (M3); verify P6-M2 |
 | `launch_app` | `app` (name/path/AUMID or app-map service), `args?`, `elevated?`, `reuse?` (default true: same app+args still open from the agent → that window), `timeout_ms?` | ref of the new (or reused) window | P1 (M3; reuse P2-M4) |
 | `close_window` | `window`, `timeout_ms?` | ok (graceful WM_CLOSE; else `NEEDS_HUMAN`); a window the agent did not open asks the user first (P2-M4) | P1 (M3) |
 | (CLI) | `xtraos-core call <tool> [json \| -] [--json] [--out f.png]` | the same tools from any shell / LLM agent without MCP; pairs with the running core (starts it if needed); same policy, dialogs, kill switch, log | P3 (ADR 0039) |
@@ -70,7 +82,7 @@ all real-input tools accept `idle_ms`. `drag` ends can be refs: `from_ref`, `to_
 |---|---|---|---|
 | `click` | `x, y` or `ref`; `window?`; `button?` (left/right/middle), `clicks?` (1–3), `modifiers?` (ctrl/shift/alt/win) | ok | P1 (M2) |
 | `type` | `window` (required, must be foreground, or `focus: true` brings it to the front first), `text` (≤ 10,000 chars, unicode), `submit?` | ok; returns once the app has the text (M6: `settled`) | P1 (M2) |
-| `press_keys` | `window` (required, must be foreground, or `focus: true`), `keys[]` e.g. `["Ctrl+S"]` | ok | P1 (M2) |
+| `press_keys` | `window` (required, must be foreground, or `focus: true`), `keys[]` e.g. `["Ctrl+S"]` (one chord may be a plain string, P6-M3) | ok | P1 (M2) |
 | `scroll` | `x, y` or `ref`, `window?`, `dx?`, `dy?` (notches; dy > 0 scrolls down) | ok | P1 (M2; ref M4) |
 | `drag` | `from_ref` or `from_x, from_y`; `to_ref` or `to_x, to_y`; `window?`, `to_window?`, `steps?`, `step_ms?`, `hold_ms?`, `drop_on_item?` | ok; ends early → cancelled (Esc), nothing dropped; a drop at x,y onto another item → `TARGET_OCCUPIED` unless `drop_on_item` (a `to_ref` target is intended) | P1 (M2; refs M4) |
 | `mouse` | `action` (move/down/up/path), `x, y` or `points[[x,y],...]`, `button?`, `window?` | ok | P1 (M2) |
@@ -89,7 +101,7 @@ Stop) every call returns `STOPPED` until the user resumes from the tray; there i
 | `wait_for` | `window?`, `window_title?`, `text_contains?`, `ref_gone?`, `window_gone?`, `idle_ms?`, `timeout_ms?` (default 10 s, max 120 s); all given conditions at once | met conditions (+ window ref) / `TIMEOUT` | P2 (M1; was P1, not built in Phase 1) |
 | `ask_human` | `message`, `kind` (confirm/choice/info/task), `options?` (choice: 2–5), `timeout_ms?` (default 120 s) | answer (`yes`/`no`/option/`ok`); `task` → `request_id` at once | P1 (M5) |
 | `wait_for_human` | `request_id`, `timeout_ms?` | `done` / `denied` (else `TIMEOUT`) | P1 (M5) |
-| `status` | — | running/stopped, paired client, kill hotkey, policy file (M5) | P1 |
+| `status` | — | running/stopped, paired client, kill hotkey, policy file (M5); `dialog`: the foreground window's owned dialog (or the foreground window when it is one) `{window, title, process, owner, blocking}` or `null` — Win32 dialogs only, in-page browser dialogs show in `observe` (P6-M4, ADR 0047) | P1, P6-M4 |
 
 ## Skills & memory (P2)
 

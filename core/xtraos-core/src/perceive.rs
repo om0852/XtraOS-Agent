@@ -181,6 +181,8 @@ fn uia() -> Result<Arc<Uia>, ActError> {
             for &p in CACHED_PROPS {
                 c.AddProperty(p).map_err(|e| com_err("AddProperty", e))?;
             }
+            // Optional (Windows 10 1809+): a missing property must not break perception.
+            let _ = c.AddProperty(UIA_IsDialogPropertyId);
             c.SetTreeScope(scope)
                 .map_err(|e| com_err("SetTreeScope", e))?;
             c.SetTreeFilter(filter)
@@ -196,6 +198,7 @@ fn uia() -> Result<Arc<Uia>, ActError> {
                 for &p in CACHED_PROPS {
                     c.AddProperty(p).map_err(|e| com_err("AddProperty", e))?;
                 }
+                let _ = c.AddProperty(UIA_IsDialogPropertyId); // optional, see above
                 c.SetTreeScope(TreeScope_Subtree)
                     .map_err(|e| com_err("SetTreeScope", e))?;
                 c.SetTreeFilter(filter)
@@ -308,6 +311,8 @@ pub struct Info {
     pub invoke: bool,
     pub scroll: bool,
     pub text: bool,
+    /// UIA IsDialog (P6-M4, ADR 0047): e.g. a browser's JavaScript alert inside its window.
+    pub dialog: bool,
 }
 
 impl Info {
@@ -400,6 +405,8 @@ struct Node {
     /// A virtualised placeholder from ItemContainerPattern (find deep): realised when an
     /// action uses its ref (ADR 0034).
     virt: bool,
+    /// Tree depth below the snapshot root (a node's subtree = the following deeper nodes).
+    depth: u32,
 }
 
 /// A cached property value, decoded and freed.
@@ -546,6 +553,7 @@ fn node(el: IUIAutomationElement) -> Node {
             invoke: has(UIA_IsInvokePatternAvailablePropertyId),
             scroll: has(UIA_IsScrollPatternAvailablePropertyId),
             text: has(UIA_IsTextPatternAvailablePropertyId),
+            dialog: has(UIA_IsDialogPropertyId),
         };
         let mut rid = runtime_id(&el);
         if rid.is_empty() {
@@ -557,6 +565,7 @@ fn node(el: IUIAutomationElement) -> Node {
             info,
             chrome: false,
             virt: false,
+            depth: 0,
         }
     }
 }
@@ -570,6 +579,7 @@ fn collect(el: &IUIAutomationElement, depth: u32, chrome: bool, out: &mut Vec<No
     let mut n = node(el.clone());
     let chrome = chrome || matches!(n.info.role, "TitleBar" | "ScrollBar");
     n.chrome = chrome;
+    n.depth = depth;
     out.push(n);
     let Ok(kids) = (unsafe { el.GetCachedChildren() }) else {
         return;
@@ -597,6 +607,82 @@ fn snapshot(h: HWND, visible_only: bool) -> Result<Vec<Node>, ActError> {
     let mut out = Vec::with_capacity(256);
     collect(&root, 0, false, &mut out);
     Ok(out)
+}
+
+// P6-M5 (ADR 0048): Chromium (Chrome, Edge, Electron) builds its page tree only after the first
+// UIA request and only while the window is not minimized.
+
+const SETTLE_MAX: Duration = Duration::from_millis(1500);
+const SETTLE_STEP: Duration = Duration::from_millis(150);
+
+/// Chromium windows that had no page after a full wait: not waited for again.
+static NO_PAGE: Mutex<Option<std::collections::HashSet<usize>>> = Mutex::new(None);
+
+fn has_document(nodes: &[Node]) -> bool {
+    nodes.iter().skip(1).any(|n| n.info.role == "Document")
+}
+
+/// Why a Chromium window shows no page: `None` (it has one, or it is not Chromium).
+pub fn page_state(chromium: bool, has_doc: bool, minimized: bool) -> Option<&'static str> {
+    match (chromium && !has_doc, minimized) {
+        (false, _) => None,
+        (true, true) => Some("minimized"),
+        (true, false) => Some("not_exposed"),
+    }
+}
+
+/// The footer note for `page_state` (pure, tested).
+pub fn page_note(state: &str) -> &'static str {
+    match state {
+        "minimized" => "; page hidden: this Chromium window is minimized and has not built its page — observe with reveal:true (shows it a moment, no focus change)",
+        _ => "; no page content exposed yet — focus_window once, or screenshot / ocr",
+    }
+}
+
+/// `snapshot`, waiting (≤ 1.5 s) for a Chromium window's page on its first read.
+/// Returns the nodes and the time waited.
+fn snapshot_settled(h: HWND, visible_only: bool) -> Result<(Vec<Node>, u64), ActError> {
+    let t0 = Instant::now();
+    let mut nodes = snapshot(h, visible_only)?;
+    if has_document(&nodes) {
+        page_seen(h);
+        return Ok((nodes, 0));
+    }
+    if !winmgr::is_chromium(h) {
+        return Ok((nodes, 0));
+    }
+    let key = h as usize;
+    let skip = || {
+        NO_PAGE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|s| s.contains(&key))
+    };
+    if winmgr::is_minimized(h) || skip() {
+        return Ok((nodes, 0));
+    }
+    while t0.elapsed() < SETTLE_MAX {
+        sleep(SETTLE_STEP);
+        crate::safety::check()?;
+        nodes = snapshot(h, visible_only)?;
+        if has_document(&nodes) {
+            return Ok((nodes, t0.elapsed().as_millis() as u64));
+        }
+    }
+    NO_PAGE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .insert(key);
+    Ok((nodes, t0.elapsed().as_millis() as u64))
+}
+
+/// A page appeared: wait again next time the window is empty.
+fn page_seen(h: HWND) {
+    if let Some(s) = NO_PAGE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        s.remove(&(h as usize));
+    }
 }
 
 /// Cached subtree of one element (observe scope_ref, P2-M1).
@@ -1034,6 +1120,102 @@ pub fn diff(
     (out, c, a, r)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Dialogs (P6-M4, ADR 0047)
+
+/// The first visible IsDialog element below the root: the node indices of its subtree
+/// (`start - 1` is the dialog itself).
+fn in_tree_dialog(nodes: &[Node]) -> Option<std::ops::Range<usize>> {
+    let i = nodes.iter().enumerate().skip(1).find_map(|(i, n)| {
+        (n.info.dialog && !n.info.offscreen && n.info.rect.2 > 0 && n.info.rect.3 > 0).then_some(i)
+    })?;
+    let d = nodes[i].depth;
+    let end = nodes[i + 1..]
+        .iter()
+        .position(|n| n.depth <= d)
+        .map_or(nodes.len(), |p| i + 1 + p);
+    Some(i + 1..end)
+}
+
+/// The dialog's message (its texts, minus the title) and its buttons with refs.
+fn dialog_parts(
+    t: &mut Table,
+    win: usize,
+    nodes: &[Node],
+    range: std::ops::Range<usize>,
+    title: &str,
+) -> (String, Vec<(String, String)>) {
+    let mut texts: Vec<String> = Vec::new();
+    let mut buttons = Vec::new();
+    for n in &nodes[range] {
+        if n.chrome || n.info.rank().is_none() {
+            continue;
+        }
+        match n.info.role {
+            "Text" if !n.info.name.trim().is_empty() && n.info.name.trim() != title.trim() => {
+                texts.push(n.info.name.trim().to_string())
+            }
+            "Button" | "SplitButton" => {
+                buttons.push((format!("e{}", t.ref_for(win, n)), n.info.name.clone()))
+            }
+            _ => {}
+        }
+    }
+    t.touch(win);
+    (clip(&texts.join(" "), 200), buttons)
+}
+
+/// `!! dialog e45 "This page says": "Saved" — buttons: e46 "OK". …` (pure, tested).
+pub fn dialog_line(
+    r: &str,
+    title: &str,
+    msg: &str,
+    buttons: &[(String, String)],
+    blocking: bool,
+    elevated: bool,
+) -> String {
+    let mut s = format!("!! dialog {r} \"{}\"", clip(title, 60));
+    if blocking {
+        s.push_str(" (blocking)");
+    }
+    if elevated {
+        s.push_str(": an administrator dialog — reading it needs elevated_helper {op:\"start\"}, or ask the user");
+        return s;
+    }
+    if !msg.is_empty() {
+        s.push_str(&format!(": \"{msg}\""));
+    }
+    if buttons.is_empty() {
+        s.push_str(" — no buttons found: observe its window, or press_keys Enter/Escape.");
+    } else {
+        let b: Vec<String> = buttons
+            .iter()
+            .map(|(r, n)| format!("{r} \"{}\"", clip(n, 30)))
+            .collect();
+        s.push_str(&format!(" — buttons: {}.", b.join(", ")));
+    }
+    s.push_str(" Answer it first; the window may not respond until it closes.");
+    s
+}
+
+fn dialog_value(
+    r: &str,
+    title: &str,
+    msg: &str,
+    buttons: &[(String, String)],
+    kind: &str,
+    blocking: bool,
+) -> Value {
+    json!({
+        "ref": r,
+        "title": title,
+        "text": msg,
+        "buttons": buttons.iter().map(|(r, n)| json!({"ref": r, "name": n})).collect::<Vec<_>>(),
+        "kind": kind,
+        "blocking": blocking,
+    })
+}
+
 fn observe(p: &Value) -> Result<Value, ActError> {
     if let Some(r) = p.get("scope_ref").filter(|v| !v.is_null()) {
         return observe_scope(p, r);
@@ -1051,9 +1233,42 @@ fn observe(p: &Value) -> Result<Value, ActError> {
             .filter(|n| (1..=500).contains(n))
             .ok_or_else(|| bad("'max_elements' must be 1..=500"))? as usize,
     };
+    let reveal = p.get("reveal").and_then(Value::as_bool).unwrap_or(false);
     let ts = Instant::now();
-    let nodes = snapshot(h, true)?;
+    // P6-M5 (ADR 0048): wait for a Chromium page on the first read; `reveal` shows a minimized
+    // Chromium window for a moment (no activation) so it builds its page, then re-minimizes it.
+    let (mut nodes, mut waited_ms) = snapshot_settled(h, true)?;
+    let chromium = winmgr::is_chromium(h);
+    let mut revealed = false;
+    if reveal && chromium && !has_document(&nodes) && winmgr::is_minimized(h) {
+        let _shown = winmgr::reveal_no_activate(h); // minimized again when dropped
+        revealed = true;
+        let t1 = Instant::now();
+        while t1.elapsed() < SETTLE_MAX {
+            sleep(SETTLE_STEP);
+            crate::safety::check()?;
+            nodes = snapshot(h, true)?;
+            if has_document(&nodes) {
+                page_seen(h);
+                break;
+            }
+        }
+        waited_ms += t1.elapsed().as_millis() as u64;
+    }
+    let page = page_state(chromium, has_document(&nodes), winmgr::is_minimized(h));
     let snapshot_ms = ts.elapsed().as_millis() as u64;
+    // P6-M4 (ADR 0047): a dialog inside the window (IsDialog, e.g. a browser alert) and its
+    // subtree are always kept; a dialog window owned by this one is read separately.
+    let in_tree = in_tree_dialog(&nodes);
+    let owned = winmgr::owned_dialog(h).map(|(d, blocking)| {
+        let elevated = winmgr::is_elevated(d);
+        let dn = if elevated {
+            None
+        } else {
+            snapshot(d, true).ok()
+        };
+        (d, blocking, elevated, dn)
+    });
     let ranks: Vec<Option<u8>> = nodes
         .iter()
         .enumerate()
@@ -1061,7 +1276,10 @@ fn observe(p: &Value) -> Result<Value, ActError> {
             if i == 0 || n.chrome {
                 None
             } else {
-                n.info.rank()
+                let boost = in_tree.as_ref().is_some_and(|r| r.contains(&i));
+                n.info
+                    .rank()
+                    .map(|r| if boost { 0 } else { r.saturating_add(1) })
             }
         })
         .collect();
@@ -1070,12 +1288,38 @@ fn observe(p: &Value) -> Result<Value, ActError> {
     let area = (f.right - f.left).max(0) as i64 * (f.bottom - f.top).max(0) as i64;
     let opaque = area > 200 * 200 && keep.len() < 5;
     let mut head = header(h);
+    if let Some(o) = winmgr::dialog_owner(h) {
+        head.push_str(&format!(" dialog of {}", winmgr::window_ref(o)));
+    }
     if opaque {
         head.push_str(" opaque");
     }
     let win = h as usize;
+    let owned_title = owned.as_ref().map(|(d, ..)| winmgr::title(*d));
+    let owned_ref = owned.as_ref().map(|(d, ..)| winmgr::window_ref(*d));
 
+    let mut dialog_json = Value::Null;
+    let mut dialog_line_text: Option<String> = None;
     let (text, is_diff) = with_table(|t| {
+        // The dialog report (refs come from the same table as every other element).
+        if let (Some((d, blocking, elevated, dn)), Some(title), Some(r)) =
+            (owned.as_ref(), owned_title.as_ref(), owned_ref.as_ref())
+        {
+            let (msg, buttons) = match dn {
+                Some(dn) if dn.len() > 1 => dialog_parts(t, *d as usize, dn, 1..dn.len(), title),
+                _ => (String::new(), Vec::new()),
+            };
+            dialog_line_text = Some(dialog_line(r, title, &msg, &buttons, *blocking, *elevated));
+            dialog_json = dialog_value(r, title, &msg, &buttons, "window", *blocking);
+        } else if let Some(range) = in_tree.clone() {
+            let i = range.start - 1;
+            let r = format!("e{}", t.ref_for(win, &nodes[i]));
+            let title = nodes[i].info.name.clone();
+            let (msg, buttons) = dialog_parts(t, win, &nodes, range, &title);
+            dialog_line_text = Some(dialog_line(&r, &title, &msg, &buttons, true, false));
+            dialog_json = dialog_value(&r, &title, &msg, &buttons, "in_page", true);
+        }
+
         let mut lines = BTreeMap::new();
         let mut ordered = Vec::with_capacity(keep.len());
         for &i in &keep {
@@ -1100,7 +1344,11 @@ fn observe(p: &Value) -> Result<Value, ActError> {
         if dropped > 0 {
             footer.push_str(&format!(" (+{dropped} more; raise max_elements)"));
         }
-        if opaque {
+        // P6-M5: a missing Chromium page says why (it is not "opaque", it is not built yet).
+        let note = page.map(page_note).unwrap_or("");
+        if !note.is_empty() {
+            footer.push_str(note);
+        } else if opaque {
             footer.push_str("; opaque: few accessible elements — use screenshot");
         }
         let full_text = format!("{head}\n{}\n{footer}", ordered.join("\n"));
@@ -1113,9 +1361,9 @@ fn observe(p: &Value) -> Result<Value, ActError> {
             }
             parts.extend(d);
             let summary = if parts.is_empty() {
-                "-- no changes".to_string()
+                format!("-- no changes{note}")
             } else {
-                format!("-- diff: {c} changed, {a} added, {r} removed")
+                format!("-- diff: {c} changed, {a} added, {r} removed{note}")
             };
             let diff_text = if parts.is_empty() {
                 format!("{}\n{summary}", winmgr::window_ref(h))
@@ -1128,6 +1376,11 @@ fn observe(p: &Value) -> Result<Value, ActError> {
         }
         snap.lines = lines;
         snap.header = head.clone();
+        // The dialog goes right after the first line, in the full list and in a diff.
+        if let Some(d) = &dialog_line_text {
+            let (first, rest) = result.0.split_once('\n').unwrap_or((&result.0, ""));
+            result.0 = format!("{first}\n{d}\n{rest}");
+        }
         result
     });
     Ok(json!({
@@ -1135,6 +1388,10 @@ fn observe(p: &Value) -> Result<Value, ActError> {
         "window": winmgr::window_ref(h),
         "elements": keep.len(),
         "opaque": opaque,
+        "dialog": dialog_json,
+        "page": page,
+        "waited_ms": waited_ms,
+        "revealed": revealed,
         "diff": is_diff,
         "ms": t0.elapsed().as_millis() as u64,
         "snapshot_ms": snapshot_ms,
@@ -1215,7 +1472,7 @@ fn find(p: &Value) -> Result<Value, ActError> {
         ),
     };
     let h = target_window(p)?;
-    let mut nodes = snapshot(h, false)?;
+    let mut nodes = snapshot_settled(h, false)?.0; // P6-M5: Chromium page on first read
     let mut deep_note = String::new();
     if deep {
         let orig = p["query"].as_str().unwrap_or("").trim().to_string();
@@ -1418,7 +1675,7 @@ fn read_text(p: &Value) -> Result<Value, ActError> {
         element_text(&t.el.0).unwrap_or_default()
     } else {
         let h = target_window(p)?;
-        main_text(&snapshot(h, false)?)
+        main_text(&snapshot_settled(h, false)?.0)
     };
     let (text, truncated) = shape_text(&raw, last);
     Ok(json!({"text": text, "truncated": truncated}))
@@ -1530,12 +1787,16 @@ fn wait_for(p: &Value) -> Result<Value, ActError> {
     // search across windows or for ref_gone).
     let window: Option<HWND> = match p.get("window").filter(|v| !v.is_null()) {
         Some(v) => {
-            let h = winmgr::parse_ref(v).ok_or_else(|| bad("window must be a ref like \"w123\""))?
-                as HWND;
-            if window_gone && !winmgr::exists(h) {
-                None // already gone: met at once below
+            // A ref whose window is gone (or whose handle another app now owns) meets
+            // `window_gone` at once; text (P6-M1a) and live refs resolve as everywhere else.
+            let gone = winmgr::parse_ref(v).is_some_and(|n| !winmgr::exists(n as HWND));
+            if window_gone && gone {
+                None
             } else {
-                Some(target_window(p)?)
+                match target_window(p) {
+                    Err(e) if window_gone && e.code == "STALE_REF" => None,
+                    r => Some(r?),
+                }
             }
         }
         None if text.is_some() || idle.is_some() => Some(target_window(p)?),
@@ -1904,6 +2165,32 @@ mod tests {
         let mut u = info("Edit", "");
         u.aid = "searchBox".into();
         assert_eq!(u.line(), "Edit #searchBox");
+    }
+
+    #[test]
+    fn a_missing_chromium_page_says_why() {
+        assert_eq!(page_state(true, false, true), Some("minimized"));
+        assert_eq!(page_state(true, false, false), Some("not_exposed"));
+        assert_eq!(page_state(true, true, true), None);
+        assert_eq!(page_state(false, false, true), None); // not Chromium: no claim
+        assert!(page_note("minimized").contains("reveal:true"));
+        assert!(page_note("not_exposed").contains("focus_window"));
+    }
+
+    #[test]
+    fn dialog_lines_name_the_buttons_first() {
+        let b = vec![("e46".to_string(), "OK".to_string()), ("e47".to_string(), "Cancel".to_string())];
+        assert_eq!(
+            dialog_line("e45", "This page says", "Saved", &b, true, false),
+            "!! dialog e45 \"This page says\" (blocking): \"Saved\" — buttons: e46 \"OK\", e47 \"Cancel\". Answer it first; the window may not respond until it closes."
+        );
+        let none = dialog_line("w9", "Find", "", &[], false, false);
+        assert!(none.starts_with("!! dialog w9 \"Find\" — no buttons found"), "{none}");
+        let adm = dialog_line("w9", "Setup", "x", &b, true, true);
+        assert!(adm.contains("elevated_helper") && !adm.contains("e46"), "{adm}");
+        let v = dialog_value("e45", "T", "m", &b, "in_page", true);
+        assert_eq!(v["buttons"][1]["ref"], "e47");
+        assert_eq!(v["kind"], "in_page");
     }
 
     #[test]

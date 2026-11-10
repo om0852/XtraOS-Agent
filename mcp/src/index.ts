@@ -7,15 +7,26 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CoreClient } from './core-client.ts';
 import { CoreError } from './errors.ts';
-import { TOOLS } from './tools.ts';
+import { INSTRUCTIONS, TOOLS, listedTools, profileFrom } from './tools.ts';
+
+import { main as setupMain } from './setup.ts';
 
 const VERSION = '0.1.0';
+
+// P5-M3 (ADR 0045): `xtraos setup` / `xtraos doctor` / `xtraos help` instead of serving MCP.
+if (process.argv.length > 2) process.exit(await setupMain(process.argv.slice(2)));
+
 const core = new CoreClient();
 
-const server = new Server({ name: 'xtraos-agent', version: VERSION }, { capabilities: { tools: {} } });
+// P5-M7 (ADR 0044): XTRAOS_TOOLS=core shortens tools/list; every tool stays callable below.
+const { profile, warning } = profileFrom(process.env.XTRAOS_TOOLS);
+if (warning) console.error(`[xtraos-mcp] ${warning}`);
+const listed = listedTools(profile);
+
+const server = new Server({ name: 'xtraos-agent', version: VERSION }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+  tools: listed.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
 }));
 
 function errorResult(code: string, message: string, hint: string) {
@@ -28,7 +39,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (!tool) return errorResult('INVALID_ARGS', `unknown tool '${req.params.name}'`, 'Call tools/list for available tools.');
   const args = (req.params.arguments ?? {}) as Record<string, unknown>;
   const extra = Object.keys(args).filter((k) => !(k in tool.inputSchema.properties));
-  if (extra.length) return errorResult('INVALID_ARGS', `unexpected argument(s): ${extra.join(', ')}`, 'See the tool schema.');
+  // P6-M3 (ADR 0046): name what the tool does accept.
+  if (extra.length) return errorResult('INVALID_ARGS', `unexpected argument(s): ${extra.join(', ')}`, `'${tool.name}' accepts: ${Object.keys(tool.inputSchema.properties).join(', ') || '(no arguments)'}.`);
   try {
     const out = await tool.run(core, args);
     return { content: typeof out === 'string' ? [{ type: 'text' as const, text: out }] : out };
@@ -39,7 +51,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 });
 
 await server.connect(new StdioServerTransport());
-console.error(`[xtraos-mcp] ${VERSION} ready on stdio`);
+console.error(`[xtraos-mcp] ${VERSION} ready on stdio (tools: ${profile}, ${listed.length})`);
 
 const shutdown = () => { core.close(); process.exit(0); };
 process.on('SIGINT', shutdown);

@@ -45,6 +45,8 @@ Step 'launcher, scripts, docs'
 # The MCP launcher every client config points at.
 "@echo off`r`n`"%~dp0node\node.exe`" `"%~dp0mcp\xtraos-mcp.mjs`" %*`r`n" |
   Set-Content -Encoding ascii -NoNewline (Join-Path $out 'xtraos-mcp.cmd')
+# `xtraos setup` / `xtraos doctor` (ADR 0045): the same launcher under a shorter name.
+Copy-Item (Join-Path $out 'xtraos-mcp.cmd') (Join-Path $out 'xtraos.cmd')
 foreach ($f in 'install.ps1', 'uninstall.ps1', 'INSTALL.md') { Copy-Item (Join-Path $PSScriptRoot $f) $out }
 "$Version" | Set-Content -Encoding ascii -NoNewline (Join-Path $out 'VERSION')
 

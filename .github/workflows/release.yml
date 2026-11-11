@@ -54,9 +54,10 @@ jobs:
         env:
           XTRAOS_SIGN_PFX_PASSWORD: ${{ secrets.XTRAOS_SIGN_PFX_PASSWORD }}
         run: |
-          $args = @('-Version', '${{ steps.v.outputs.version }}')
-          if ('${{ steps.cert.outputs.pfx }}') { $args += @('-PfxPath', '${{ steps.cert.outputs.pfx }}') }
-          ./release/build-release.ps1 @args
+          # Named parameters (a hashtable): splatting an array would pass them by position.
+          $build = @{ Version = '${{ steps.v.outputs.version }}' }
+          if ('${{ steps.cert.outputs.pfx }}') { $build.PfxPath = '${{ steps.cert.outputs.pfx }}' }
+          ./release/build-release.ps1 @build
       - name: Remove the certificate file
         if: always()
         shell: pwsh

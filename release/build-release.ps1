@@ -3,7 +3,7 @@
 # Everything is free and local: release build of the core, the MCP server with production
 # dependencies, and the official signed Node 24 runtime copied from this machine.
 #   -PfxPath <file.pfx>     or sign with a .pfx (password in XTRAOS_SIGN_PFX_PASSWORD) (ADR 0071)
-param([string]$CertThumbprint = '', [string]$PfxPath = '', [string]$Version = '0.1.0')
+param([string]$CertThumbprint = '', [string]$PfxPath = '', [string]$Version = '0.1.1')
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"

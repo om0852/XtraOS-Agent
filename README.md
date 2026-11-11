@@ -45,10 +45,10 @@ bundle carries its own Node.js.
    cd mcp; npm ci; cd ..
    powershell -ExecutionPolicy Bypass -File release/build-release.ps1
    ```
-   → `dist\xtraos-0.1.0-win-x64\` (plus a zip and `SHA256SUMS.txt`).
+   → `dist\xtraos-0.1.1-win-x64\` (plus a zip and `SHA256SUMS.txt`).
 2. Install it (per user, no admin rights):
    ```powershell
-   cd dist\xtraos-0.1.0-win-x64
+   cd dist\xtraos-0.1.1-win-x64
    powershell -ExecutionPolicy Bypass -File install.ps1
    ```
    Then connect your AI tools. `xtraos setup` shows the entry it would add for each client

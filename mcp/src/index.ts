@@ -12,7 +12,7 @@ import { INSTRUCTIONS, TOOLS, listedTools, mcpClientName, profileFrom } from './
 
 import { main as setupMain } from './setup.ts';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const argv = process.argv.slice(2);
 
 // ADR 0072: `--http [--port N]` (or XTRAOS_HTTP_PORT) serves MCP on 127.0.0.1 with a token.

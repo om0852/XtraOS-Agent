@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..', '..');
-const exe = path.join(root, 'dist', 'xtraos-0.1.0-win-x64', 'bin', 'xtraos-core.exe');
+const exe = path.join(root, 'dist', 'xtraos-0.1.1-win-x64', 'bin', 'xtraos-core.exe');
 if (!fs.existsSync(exe)) throw new Error('build the bundle first: release/build-release.ps1');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'xtraos-bench-'));

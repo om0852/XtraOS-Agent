@@ -602,8 +602,22 @@ fn snapshot(h: HWND, visible_only: bool) -> Result<Vec<Node>, ActError> {
     } else {
         &u.cache
     };
-    let root = unsafe { u.a.ElementFromHandleBuildCache(WHWND(h), cache) }
-        .map_err(|e| com_err("reading the window's UI tree", e))?;
+    // ADR 0075: a whole window is never "stale" while it still exists; UI Automation sometimes
+    // fails one read while the app redraws (Paint, during the sunflower demo). Retry twice.
+    let mut tries = 0;
+    let root = loop {
+        match unsafe { u.a.ElementFromHandleBuildCache(WHWND(h), cache) } {
+            Ok(r) => break r,
+            Err(e) => {
+                let e = com_err("reading the window's UI tree", e);
+                tries += 1;
+                if e.code != "STALE_REF" || tries > 2 || !winmgr::exists(h) {
+                    return Err(e);
+                }
+                std::thread::sleep(Duration::from_millis(120));
+            }
+        }
+    };
     let mut out = Vec::with_capacity(256);
     collect(&root, 0, false, &mut out);
     Ok(out)

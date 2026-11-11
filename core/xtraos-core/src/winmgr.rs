@@ -782,15 +782,32 @@ unsafe extern "system" fn collect_visible(h: HWND, lparam: isize) -> BOOL {
 pub fn owned_dialog(h: HWND) -> Option<(HWND, bool)> {
     let mut v: Vec<HWND> = Vec::new();
     unsafe { EnumWindows(collect_visible, (&mut v as *mut Vec<HWND>) as isize) };
-    let blocked = !is_enabled(h);
+    let pid = pid_of(h);
     v.into_iter()
-        .find(|&d| {
-            d != h
-                && owned_by(d, h)
-                && !crate::safety::is_own_window(d)
-                && counts_as_dialog(&class_name(d), !is_enabled(owner(d)))
+        .find_map(|d| {
+            if d == h || crate::safety::is_own_window(d) {
+                return None;
+            }
+            let o = owner(d);
+            if owned_by(d, h) {
+                counts_as_dialog(&class_name(d), !is_enabled(o)).then_some((d, !is_enabled(h)))
+            } else {
+                // ADR 0075: Office modals (e.g. Excel's "Create Table", class NUIDialog) are owned
+                // by a hidden, disabled frame of the same process, not by the visible window.
+                hidden_owner_modal(pid_of(d) == pid, !o.is_null(), is_visible(o), is_enabled(o))
+                    .then_some((d, true))
+            }
         })
-        .map(|d| (d, blocked))
+}
+
+/// Pure rule (ADR 0075): a visible window of the same process whose owner is a hidden, disabled
+/// window is a modal dialog of that app, and it blocks the app's visible window.
+pub fn hidden_owner_modal(same_process: bool, has_owner: bool, owner_visible: bool, owner_enabled: bool) -> bool {
+    same_process && has_owner && !owner_visible && !owner_enabled
+}
+
+fn is_visible(h: HWND) -> bool {
+    unsafe { IsWindowVisible(h) != 0 }
 }
 
 /// `h` is itself an owned dialog: its owner's ref.
@@ -1450,6 +1467,15 @@ mod tests {
     }
 
     // P6-M4 (ADR 0047): which owned windows are dialogs.
+    #[test]
+    fn hidden_owner_modal_rule() {
+        assert!(hidden_owner_modal(true, true, false, false), "Excel Create Table: hidden disabled owner");
+        assert!(!hidden_owner_modal(false, true, false, false), "another process");
+        assert!(!hidden_owner_modal(true, false, false, false), "no owner");
+        assert!(!hidden_owner_modal(true, true, true, false), "visible owner: the normal owned rule applies");
+        assert!(!hidden_owner_modal(true, true, false, true), "owner enabled: not modal");
+    }
+
     #[test]
     fn owned_dialog_rule() {
         assert!(counts_as_dialog("#32770", false)); // message box, find dialog

@@ -498,8 +498,46 @@ fn own_dirs() -> Vec<PathBuf> {
 }
 
 /// Normalised + checked path (and its real target if it exists: junctions cannot sneak around).
+/// Short 8.3 names (`C:\Users\RUNNER~1\…`) expanded to the real long path, so the protected-
+/// place rules compare like with like (found on GitHub's runners: the user's own temp folder
+/// was refused as "other users' folders"). For a path that does not exist yet, its deepest
+/// existing folder is expanded and the rest appended.
+pub fn long_path(p: &Path) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetLongPathNameW(short: *const u16, long: *mut u16, n: u32) -> u32;
+    }
+    if !p.to_string_lossy().contains('~') {
+        return p.to_path_buf();
+    }
+    let (mut base, mut rest) = (p.to_path_buf(), Vec::new());
+    while !base.exists() {
+        match (base.file_name().map(|s| s.to_os_string()), base.parent()) {
+            (Some(n), Some(par)) => {
+                rest.push(n);
+                base = par.to_path_buf();
+            }
+            _ => return p.to_path_buf(),
+        }
+    }
+    let w: Vec<u16> = base.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut buf = vec![0u16; 2048];
+    let n = unsafe { GetLongPathNameW(w.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+    if n == 0 || n as usize >= buf.len() {
+        return p.to_path_buf();
+    }
+    let mut out = PathBuf::from(OsString::from_wide(&buf[..n as usize]));
+    for r in rest.iter().rev() {
+        out.push(r);
+    }
+    out
+}
+
 pub(crate) fn checked(p: &str) -> Result<PathBuf, ActError> {
     let n = normalize(p).ok_or_else(|| bad(format!("'{p}' must be an absolute path")))?;
+    let n = long_path(&n);
     let own = own_dirs();
     if let Some(why) = protected_reason(&n, &own) {
         return Err(blocked(format!("{} is protected ({why})", n.display())));
@@ -2682,5 +2720,43 @@ mod open_app_tests {
         for p in ["report.xlsx", "notes.txt", "photo.png", "deck.pptx", "doc.pdf", "page.html", "README"] {
             assert!(!runs_code(Path::new(p)), "{p}");
         }
+    }
+}
+
+#[cfg(test)]
+mod short_path_tests {
+    use super::{checked, long_path};
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    fn short_of(p: &std::path::Path) -> Option<std::path::PathBuf> {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetShortPathNameW(long: *const u16, short: *mut u16, n: u32) -> u32;
+        }
+        let w: Vec<u16> = p.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let mut buf = vec![0u16; 2048];
+        let n = unsafe { GetShortPathNameW(w.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+        (n > 0 && (n as usize) < buf.len()).then(|| std::ffi::OsString::from_wide(&buf[..n as usize]).into())
+    }
+
+    #[test]
+    fn short_names_are_expanded_before_the_rules() {
+        let long = std::env::temp_dir().join(format!("xtraos long folder name {}", std::process::id()));
+        std::fs::create_dir_all(&long).unwrap();
+        let canon = long_path(&long);
+        match short_of(&long) {
+            // 8.3 names can be turned off on a drive; then there is nothing to expand.
+            Some(short) if short.to_string_lossy().contains('~') => {
+                assert_eq!(long_path(&short).to_string_lossy().to_lowercase(), canon.to_string_lossy().to_lowercase());
+                let ok = checked(&short.to_string_lossy()).expect("the user's own temp folder by its short name");
+                assert!(!ok.to_string_lossy().contains('~'), "{}", ok.display());
+                // a path that does not exist yet under a short folder name
+                let child = checked(&short.join("new sub").to_string_lossy()).unwrap();
+                assert!(child.ends_with("new sub") && !child.to_string_lossy().contains('~'), "{}", child.display());
+            }
+            _ => eprintln!("8.3 names are off on this drive; nothing to check"),
+        }
+        assert_eq!(long_path(std::path::Path::new(r"C:\plain\path")), std::path::PathBuf::from(r"C:\plain\path"));
+        let _ = std::fs::remove_dir_all(&long);
     }
 }

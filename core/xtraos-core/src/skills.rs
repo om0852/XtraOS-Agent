@@ -102,7 +102,7 @@ pub const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "dev.check",
-        args: "window, expect[{text|no_text|element(+role)|title}], timeout_ms?, screenshot_on_fail?",
+        args: "window, expect[{text}|{no_text}|{element, role?, value?, enabled?}|{title}|{changed: true}], timeout_ms?, screenshot_on_fail?",
         about: "UI check of an app: PASS/FAIL per expectation, retried until timeout (3 s); a failure saves a screenshot",
         class: Class::Observe,
     },

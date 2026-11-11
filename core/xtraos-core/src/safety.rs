@@ -1290,6 +1290,24 @@ pub fn notify_allowed(last: Option<Instant>, now: Instant) -> bool {
 
 static LAST_NOTIFY: Mutex<Option<Instant>> = Mutex::new(None);
 
+/// A notification that waits for the 10-second spacing (≤ 11 s) instead of being dropped
+/// (ADR 0066: two reminders in the same minute both show). False: no tray icon.
+pub fn notify_waiting(title: &str, text: &str) -> bool {
+    let t0 = Instant::now();
+    loop {
+        {
+            let now = Instant::now();
+            let mut last = LAST_NOTIFY.lock().unwrap_or_else(|e| e.into_inner());
+            if notify_allowed(*last, now) || t0.elapsed() > std::time::Duration::from_secs(11) {
+                *last = Some(now);
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    notify(title, text, false)
+}
+
 static HELPER_MODE: AtomicBool = AtomicBool::new(false);
 
 /// This process is the elevated admin helper (ADR 0030): its own tray text and dialog

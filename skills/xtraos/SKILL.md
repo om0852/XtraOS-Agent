@@ -39,6 +39,7 @@ From WSL (not verified yet): call the .exe by its Windows path through interop, 
    `type {"window":"w..","text":"..."}` and `press_keys {"window":"w..","keys":["Ctrl+S"]}` borrow
    the window while the user is idle.
 5. Prefer `find {"window":"w..","query":"Save"}`, `read_text` and `wait_for` over screenshots.
+   Not sure which window? `run_skill {"name":"screen.find","args":{"query":"Save"}}` searches all.
    Use `screenshot` or `ocr` only when observe says the window is opaque (games, canvas).
 6. `batch {"steps":[{"tool":"click","args":{"ref":"e12"}}, ...]}` runs up to 50 steps in one call.
 
@@ -48,7 +49,7 @@ From WSL (not verified yet): call the .exe by its Windows path through interop, 
 
 | Skill | What it does |
 |---|---|
-| `files.find` / `files.list` / `files.open` | find files (newest first), list a folder, open with the default app |
+| `files.find` / `files.list` / `files.open` | find files (newest first), list a folder; `files.open` shows a file in Explorer, `{"app": true}` opens a document in its app |
 | `files.copy` / `move` / `rename` / `mkdir` / `delete` | file changes (delete and overwrites ask the user) |
 | `files.duplicates` / `files.largest` | read-only clean-up reports |
 | `files.organize` / `files.bulk_rename` | a preview; `apply: true` asks the user, then does it undoably |
@@ -56,9 +57,14 @@ From WSL (not verified yet): call the .exe by its Windows path through interop, 
 | `office.word_read` / `word_append` | read a document, add paragraphs |
 | `office.ppt_read` / `ppt_add_slide` | read slides, add a title + bullets slide |
 | `office.export_pdf` | Word / Excel / PowerPoint → PDF |
+| `layout.save` / `restore` / `list` / `delete` | remember and restore how windows are arranged |
+| `window.snap` | snap a window left / right / a quarter / center / maximize on its monitor |
+| `files.recent` / `files.read_text` | files changed lately; read a text file (txt, csv, json, md, code) |
+| `disk.usage` | free space per drive |
+| `notify.show` | a Windows notification; with `routine.add {skill: "notify.show", once_at: "17:00"}` a reminder |
 | `dev.check` | assert text / elements / a visual change in a window (UI tests) |
 | `task.save` / `task.load` / `task.list` / `task.done` | checkpoint a long task so another session can resume it |
-| `routine.add` / `list` / `run` / `remove` / `summary` | run a skill on a schedule while XtraOS runs (adding asks the user) |
+| `routine.add` / `list` / `run` / `remove` / `summary` | run a skill on a schedule, or for each new file in a folder (`{file}` in args), while XtraOS runs (adding asks the user) |
 | `skill.export` / `skill.import` | share recorded skills (import shows the user every step) |
 
 Example:

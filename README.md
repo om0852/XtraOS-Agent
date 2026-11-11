@@ -86,8 +86,8 @@ Uninstall: `%LOCALAPPDATA%\Programs\XtraOS\uninstall.ps1` (`-Purge` also removes
 |---|---|
 | See | `observe` (element tree with refs, diffs, positions), `find` (incl. virtualised list rows), `read_text`, `screenshot`, `ocr`, `frame_diff`, `wait_for` |
 | Act | `click`, `type`, `press_keys`, `scroll`, `drag`, `mouse`, `set_value`, `clipboard`, `touch`, `pen`, `batch` (up to 50 steps in one call) |
-| Windows and apps | `list_windows`, `focus_window`, `launch_app`, `close_window`, `window_bounds`, `cleanup`, `app_map` |
-| Files and routines | skills: `files.list/find/open/mkdir/copy/move/rename/delete`, `files.duplicates/largest/organize/bulk_rename`, macro skills, `record_session` → replayable skill, `routine.*` (a skill on a schedule; you approve each routine), `task.*` checkpoints |
+| Windows and apps | `list_windows`, `focus_window`, `launch_app`, `close_window`, `window_bounds`, `cleanup`, `app_map`; skills `layout.save/restore` (window arrangements), `window.snap`, `screen.find` (all windows), `disk.usage` |
+| Files and routines | skills: `files.list/find/open/mkdir/copy/move/rename/delete`, `files.duplicates/largest/organize/bulk_rename`, macro skills, `record_session` → replayable skill, `routine.*` (a skill on a schedule, once, or per new file; you approve each routine), reminders (`notify.show` + `once_at`), `task.*` checkpoints |
 | Office | `office.excel_read/excel_write`, `office.word_read/word_append`, `office.ppt_read/ppt_add_slide`, `office.export_pdf` (hidden Office, macros off) |
 | Several agents | per-window locks, per-agent permissions (`policy.json` `clients`), tray → Agents to pause one agent, live "Agents now" view |
 | Human in the loop | `ask_human`, `wait_for_human`, approval dialogs, kill switch, `status` |

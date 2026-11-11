@@ -463,6 +463,35 @@ pub fn write_values(a: &Value) -> Result<Vec<Vec<Value>>, ActError> {
     Ok(out)
 }
 
+/// Widest column after autofit, in Excel's character units.
+const MAX_COL_WIDTH: f64 = 60.0;
+
+/// Formatting arguments of excel_write (pure): `autofit` (default true), `bold` ranges (≤ 20).
+pub fn format_args(a: &Value) -> Result<(bool, Vec<String>), ActError> {
+    let autofit = match a.get("autofit") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad("'autofit' must be true or false")),
+    };
+    let bold: Vec<String> = match a.get("bold") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(v)) => v
+            .iter()
+            .map(|x| {
+                x.as_str()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty() && s.len() <= 32 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == ':' || c == '$'))
+                    .ok_or_else(|| bad("'bold' is a list of ranges like \"A1:D1\""))
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => return Err(bad("'bold' is a list of ranges like \"A1:D1\"")),
+    };
+    if bold.len() > 20 {
+        return Err(bad("at most 20 'bold' ranges"));
+    }
+    Ok((autofit, bold))
+}
+
 pub fn excel_write(a: &Value) -> Result<Value, ActError> {
     let path = crate::skills::checked(str_arg(a, "path")?)?;
     let save_as = match a.get("save_as").and_then(Value::as_str) {
@@ -482,6 +511,7 @@ pub fn excel_write(a: &Value) -> Result<Value, ActError> {
     let range = str_arg(a, "range")?.to_string();
     let sheet = a.get("sheet").and_then(Value::as_str).map(String::from);
     let values = write_values(a)?;
+    let (autofit, bold) = format_args(a)?;
     let cells: usize = values.iter().map(Vec::len).sum();
     let target = save_as.clone().unwrap_or_else(|| path.clone());
     run("Excel.Application", move || {
@@ -503,6 +533,25 @@ pub fn excel_write(a: &Value) -> Result<Value, ActError> {
                 for (j, v) in row.iter().enumerate() {
                     let cell = start.obj("Cells", vec![var_i32(i as i32 + 1), var_i32(j as i32 + 1)])?;
                     cell.put("Value2", var_json(v))?;
+                }
+            }
+            // Readable without touching it (D1 demo: dates showed as ######, headers plain).
+            for r in &bold {
+                ws.obj("Range", vec![var_str(r)])
+                    .map_err(|_| bad(format!("bold: '{r}' is not a range like A1:D1")))?
+                    .obj("Font", Vec::new())?
+                    .put("Bold", var_bool(true))?;
+            }
+            if autofit {
+                let cols = ws.obj("UsedRange", Vec::new())?.obj("Columns", Vec::new())?;
+                cols.get("AutoFit", Vec::new())?;
+                let n = var_to_json(&cols.get("Count", Vec::new())?.0).as_i64().unwrap_or(0) as i32;
+                for i in 1..=n.min(200) {
+                    let c = cols.obj("Item", vec![var_i32(i)])?;
+                    // Very long text (file names) would make a column wider than the screen.
+                    if var_to_json(&c.get("ColumnWidth", Vec::new())?.0).as_f64().unwrap_or(0.0) > MAX_COL_WIDTH {
+                        c.put("ColumnWidth", var_f64(MAX_COL_WIDTH))?;
+                    }
                 }
             }
             if new_book || save_as.is_some() {
@@ -876,6 +925,18 @@ pub fn ppt_add_slide(a: &Value) -> Result<Value, ActError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn excel_format_args() {
+        assert_eq!(format_args(&json!({})).unwrap(), (true, vec![]));
+        assert_eq!(format_args(&json!({"autofit": false, "bold": ["A1:D1", " A8 "]})).unwrap(), (false, vec!["A1:D1".to_string(), "A8".to_string()]));
+        assert!(format_args(&json!({"bold": "A1"})).is_err());
+        assert!(format_args(&json!({"bold": ["A1;D1"]})).is_err());
+        assert!(format_args(&json!({"bold": ["=SUM(A1)"]})).is_err());
+        assert!(format_args(&json!({"autofit": "yes"})).is_err());
+        let many: Vec<String> = (1..=21).map(|i| format!("A{i}")).collect();
+        assert!(format_args(&json!({"bold": many})).is_err());
+    }
 
     #[test]
     fn ppt_text_and_slide_args() {

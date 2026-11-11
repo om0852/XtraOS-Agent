@@ -647,6 +647,10 @@ pub fn frame(h: HWND) -> RECT {
     r
 }
 
+pub fn window_state(h: HWND) -> &'static str {
+    state(h)
+}
+
 fn state(h: HWND) -> &'static str {
     unsafe {
         if IsIconic(h) != 0 {

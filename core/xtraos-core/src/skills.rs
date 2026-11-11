@@ -67,8 +67,8 @@ pub const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "files.open",
-        args: "path",
-        about: "open a folder in Explorer, or show a file selected in its folder",
+        args: "path, app? (true: open the file in its default app)",
+        about: "show a file selected in its folder in Explorer (a folder: open it); app: true opens a document in its default app (never programs or scripts)",
         class: Class::Launch,
     },
     Builtin {
@@ -126,9 +126,81 @@ pub const BUILTINS: &[Builtin] = &[
         class: Class::FileChange,
     },
     Builtin {
+        name: "window.snap",
+        args: "window, to: left|right|top|bottom|top-left|top-right|bottom-left|bottom-right|center|maximize",
+        about: "snap a window to part of its monitor (background, no focus change)",
+        class: Class::Input,
+    },
+    Builtin {
+        name: "files.recent",
+        args: "days? (2), limit? (20), pattern?",
+        about: "files changed lately in Desktop, Documents and Downloads, newest first",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "files.read_text",
+        args: "path, max_chars? (20000)",
+        about: "the text of a text file (txt, csv, json, md, code; ≤ 5 MB)",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "disk.usage",
+        args: "",
+        about: "free space on each drive (LOW under 10 % or 5 GB)",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "routine.pause",
+        args: "name",
+        about: "stop a routine from running until routine.resume",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "routine.resume",
+        args: "name",
+        about: "let a paused routine run again",
+        class: Class::FileChange,
+    },
+    Builtin {
+        name: "screen.find",
+        args: "query, timeout_ms? (5000), max_windows? (10)",
+        about: "find text (element names) in every open window, front first; refs work at once",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "notify.show",
+        args: "text, title?",
+        about: "a Windows notification from the XtraOS tray icon (with routine once_at: a reminder)",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "layout.save",
+        args: "name, filter?",
+        about: "remember where the open windows are (position, size, maximized/minimized)",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "layout.restore",
+        args: "name",
+        about: "put the open windows back where a saved layout had them (reports windows not open)",
+        class: Class::Input,
+    },
+    Builtin {
+        name: "layout.list",
+        args: "",
+        about: "the saved window layouts",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "layout.delete",
+        args: "name",
+        about: "delete a saved window layout",
+        class: Class::Observe,
+    },
+    Builtin {
         name: "routine.add",
-        args: "name, skill, args?, every_minutes? (≥ 5) | daily_at? \"HH:MM\"",
-        about: "run a skill on a schedule while XtraOS runs (the user approves it in a dialog)",
+        args: "name, skill, args?, every_minutes? (≥ 5) | daily_at? \"HH:MM\" | once_at? \"HH:MM\"|\"YYYY-MM-DD HH:MM\" | new_file_in? (folder) + pattern?, notify? failure|always|never",
+        about: "run a skill on a schedule or for each new file in a folder ({file} in args), while XtraOS runs (the user approves it in a dialog)",
         class: Class::FileChange,
     },
     Builtin {
@@ -513,12 +585,25 @@ pub fn plan(p: &Value) -> Result<Plan, ActError> {
             // is checked (paths, credentials) before that dialog.
             "routine.add" => {
                 let r = crate::routines::from_args(&args, 0, "")?;
-                plan(&json!({"name": r.skill, "args": r.args}))?;
+                plan(&json!({"name": r.skill, "args": crate::routines::sample_args(&r)}))?;
                 format!("add routine '{}': {} {}", r.name, r.skill, r.schedule.describe())
             }
             "routine.run" => format!("run routine '{}' now", str_arg(&args, "name")?),
             "routine.remove" => format!("remove routine '{}'", str_arg(&args, "name")?),
-            "routine.list" | "routine.summary" => b.about.to_string(),
+            "routine.list" | "routine.summary" | "layout.list" => b.about.to_string(),
+            "screen.find" => format!("find \"{}\" in all open windows", crate::perceive::clip(str_arg(&args, "query")?, 60)),
+            "window.snap" => format!("snap window {} to the {}", args.get("window").map(|w| w.to_string()).unwrap_or_default(), str_arg(&args, "to")?),
+            "files.recent" | "disk.usage" => b.about.to_string(),
+            "files.read_text" => format!("read the text of {}", checked(str_arg(&args, "path")?)?.display()),
+            "routine.pause" => format!("pause routine '{}'", str_arg(&args, "name")?),
+            "routine.resume" => format!("resume routine '{}'", str_arg(&args, "name")?),
+            "notify.show" => {
+                let (title, text) = notify_args(&args)?;
+                format!("show the notification \"{}: {}\"", title, crate::perceive::clip(&text, 80))
+            }
+            "layout.save" => format!("save the window layout '{}'", str_arg(&args, "name")?),
+            "layout.restore" => format!("arrange the windows as in layout '{}'", str_arg(&args, "name")?),
+            "layout.delete" => format!("delete the window layout '{}'", str_arg(&args, "name")?),
             "office.ppt_add_slide" => {
                 let x = checked(str_arg(&args, "path")?)?;
                 let (title, bullets) = crate::office::slide_args(&args)?;
@@ -706,6 +791,17 @@ pub fn run(p: &Value, log: &mut dyn FnMut(crate::exec::StepLog)) -> Result<Value
         "office.ppt_read" => crate::office::ppt_read(&args),
         "office.ppt_add_slide" => crate::office::ppt_add_slide(&args),
         n if n.starts_with("routine.") => crate::routines::run(n, &args),
+        n if n.starts_with("layout.") => crate::layouts::run(n, &args),
+        "screen.find" => screen_find(&args),
+        "window.snap" => crate::everyday::window_snap(&args),
+        "files.recent" => crate::everyday::files_recent(&args),
+        "files.read_text" => crate::everyday::files_read_text(&args),
+        "disk.usage" => crate::everyday::disk_usage(),
+        "notify.show" => {
+            let (title, text) = notify_args(&args)?;
+            let shown = crate::safety::notify_waiting(&title, &text);
+            Ok(json!({"text": if shown { format!("ok notification shown: {title}") } else { "the XtraOS tray icon is not available: nothing shown".into() }, "shown": shown}))
+        }
         n => Err(bad(format!("unknown skill '{n}'"))),
     }
 }
@@ -1210,10 +1306,76 @@ fn files_find(a: &Value) -> Result<Value, ActError> {
     )
 }
 
+/// Files that run code when "opened": never opened with `app: true` (that would be launching a
+/// program by the back door; launch_app is the explicit way). Pure.
+pub fn runs_code(p: &Path) -> bool {
+    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    [
+        "exe", "com", "bat", "cmd", "ps1", "psm1", "psd1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "msi", "msp", "msix",
+        "appx", "scr", "lnk", "url", "hta", "cpl", "jar", "reg", "py", "pyw", "appref-ms", "msc", "pif", "inf", "sys", "dll",
+        "application", "gadget", "settingcontent-ms", "library-ms", "search-ms",
+    ]
+    .contains(&ext.as_str())
+}
+
+/// `files.open {path, app: true}` (D1 demo fix): open a document in its default app; returns
+/// the app's window when one with the file's name appears within 15 s.
+fn open_with_app(x: &Path) -> Result<Value, ActError> {
+    if x.is_dir() {
+        return Err(bad("app: true opens files; a folder opens in Explorer without it"));
+    }
+    if runs_code(x) {
+        return Err(blocked(format!(
+            "{} is a program or script; files.open does not run code (use launch_app, which asks the user where the policy says so)",
+            x.display()
+        )));
+    }
+    let before = crate::winmgr::listable_windows();
+    let file = windows::core::HSTRING::from(x.as_os_str());
+    let r = unsafe {
+        windows::Win32::UI::Shell::ShellExecuteW(
+            None,
+            windows::core::w!("open"),
+            &file,
+            windows::core::PCWSTR::null(),
+            windows::core::PCWSTR::null(),
+            windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        )
+    };
+    if (r.0 as isize) <= 32 {
+        return Err(ActError {
+            code: "NEEDS_HUMAN",
+            message: format!("Windows could not open {} (no app for this file type?)", x.display()),
+            hint: "Ask the user which app should open it, or use launch_app with that app.",
+        });
+    }
+    let stem = x.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let t0 = std::time::Instant::now();
+    while t0.elapsed() < std::time::Duration::from_secs(15) {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        crate::safety::check()?;
+        // A new window with the file's name first; else one that already existed (the file
+        // was open already and the app just came forward).
+        let wins = crate::winmgr::listable_windows();
+        let named = |h: &crate::input::HWND| crate::winmgr::title(*h).to_lowercase().contains(&stem);
+        if let Some(h) = wins.iter().find(|h| !before.contains(h) && named(h)).or_else(|| wins.iter().find(|h| named(h))).copied() {
+            return Ok(json!({
+                "text": format!("ok opened {} in {} ({})", x.display(), crate::winmgr::process_name(crate::winmgr::pid_of(h)), crate::winmgr::window_ref(h)),
+                "ref": crate::winmgr::window_ref(h),
+                "title": crate::winmgr::title(h),
+            }));
+        }
+    }
+    Ok(json!({"text": format!("ok asked Windows to open {}; no window with its name seen within 15 s (list_windows to find it)", x.display()), "ref": null}))
+}
+
 fn files_open(a: &Value) -> Result<Value, ActError> {
     let x = checked(str_arg(a, "path")?)?;
     if !x.exists() {
         return Err(bad(format!("{} does not exist", x.display())));
+    }
+    if a.get("app").and_then(Value::as_bool).unwrap_or(false) {
+        return open_with_app(&x);
     }
     let args = if x.is_dir() {
         json!([x.to_string_lossy()])
@@ -1368,7 +1530,7 @@ fn delete(a: &Value) -> Result<Value, ActError> {
 /// Every file under `root` (breadth-first, like files.find: no hidden folders, AppData,
 /// node_modules, links or protected places): (path, size, modified ms), and whether the time
 /// budget cut the walk short.
-fn walk_files(root: &Path, budget: std::time::Duration) -> (Vec<(PathBuf, u64, u64)>, bool) {
+pub(crate) fn walk_files(root: &Path, budget: std::time::Duration) -> (Vec<(PathBuf, u64, u64)>, bool) {
     use std::os::windows::fs::MetadataExt;
     const HIDDEN: u32 = 0x2;
     const REPARSE: u32 = 0x400;
@@ -1580,6 +1742,97 @@ pub fn type_folder(name: &str) -> &'static str {
 }
 
 /// Downloads still in progress, never moved (pure).
+// ---------------------------------------------------------------------------------------------
+// screen.find (ADR 0067)
+
+const SCREEN_FIND_LINES: usize = 5;
+
+/// The combined result text (pure). `hits`: (window header, matching element lines, total).
+pub fn screen_find_text(query: &str, hits: &[(String, Vec<String>, u64)], searched: usize, skipped: usize, out_of_time: bool) -> String {
+    let mut s = String::new();
+    for (head, lines, total) in hits {
+        s.push_str(&format!("{head}: {total} match(es)\n"));
+        for l in lines.iter().take(SCREEN_FIND_LINES) {
+            s.push_str(&format!("  {l}\n"));
+        }
+        if *total as usize > SCREEN_FIND_LINES {
+            s.push_str("  … more: use find in that window\n");
+        }
+    }
+    let n: u64 = hits.iter().map(|h| h.2).sum();
+    s.push_str(&format!(
+        "-- \"{query}\": {n} match(es) in {} window(s); searched {searched}{}{}",
+        hits.len(),
+        if skipped > 0 { format!(", {skipped} skipped (not responding or closing)") } else { String::new() },
+        if out_of_time { "; time budget reached: raise timeout_ms to search the rest" } else { "" }
+    ));
+    if n == 0 {
+        s.push_str("\nNothing found by name. Text drawn as pixels (games, canvas, images) needs ocr on a window.");
+    }
+    s
+}
+
+fn screen_find(a: &Value) -> Result<Value, ActError> {
+    let query = str_arg(a, "query")?.trim().to_string();
+    let budget = std::time::Duration::from_millis(a.get("timeout_ms").and_then(Value::as_u64).unwrap_or(5_000).clamp(500, 15_000));
+    let max_windows = a.get("max_windows").and_then(Value::as_u64).unwrap_or(10).clamp(1, 40) as usize;
+    let t0 = std::time::Instant::now();
+    let mut hits = Vec::new();
+    let (mut searched, mut skipped, mut out_of_time) = (0, 0, false);
+    for h in crate::winmgr::listable_windows() {
+        if crate::safety::is_own_window(h) || crate::winmgr::is_elevated(h) {
+            continue;
+        }
+        if t0.elapsed() >= budget {
+            out_of_time = true;
+            break;
+        }
+        if hits.len() >= max_windows {
+            break;
+        }
+        crate::safety::check()?;
+        let r = crate::winmgr::window_ref(h);
+        searched += 1;
+        match crate::perceive::run("find", &json!({"window": r, "query": query})) {
+            Ok(v) => {
+                let total = v["matches"].as_u64().unwrap_or(0);
+                if total > 0 {
+                    let lines: Vec<String> = v["text"].as_str().unwrap_or("").lines().filter(|l| !l.starts_with("--")).map(String::from).collect();
+                    let head = format!(
+                        "{r} {} \"{}\"",
+                        crate::winmgr::process_name(crate::winmgr::pid_of(h)),
+                        crate::perceive::clip(&crate::winmgr::title(h), 50)
+                    );
+                    hits.push((head, lines, total));
+                }
+            }
+            Err(e) if e.code == "STOPPED" => return Err(e),
+            Err(_) => skipped += 1,
+        }
+    }
+    let windows: Vec<Value> = hits.iter().map(|(h, _, n)| json!({"window": h.split(' ').next().unwrap_or(""), "matches": n})).collect();
+    Ok(json!({
+        "text": screen_find_text(&query, &hits, searched, skipped, out_of_time),
+        "windows": windows,
+        "searched": searched,
+        "skipped": skipped,
+        "complete": !out_of_time,
+    }))
+}
+
+/// `notify.show` arguments (pure): title (default "XtraOS reminder", ≤ 60), text (≤ 250).
+pub fn notify_args(a: &Value) -> Result<(String, String), ActError> {
+    let text = a.get("text").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("'text' is required"))?;
+    if text.chars().count() > 250 {
+        return Err(bad("'text' is limited to 250 characters"));
+    }
+    let title = a.get("title").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).unwrap_or("XtraOS reminder");
+    if title.chars().count() > 60 {
+        return Err(bad("'title' is limited to 60 characters"));
+    }
+    Ok((title.to_string(), text.to_string()))
+}
+
 pub fn unfinished(name: &str) -> bool {
     let n = name.to_lowercase();
     [".crdownload", ".part", ".partial", ".download", ".tmp"]
@@ -2363,5 +2616,43 @@ mod tests {
                 .code,
             "BLOCKED_BY_POLICY"
         );
+    }
+}
+
+#[cfg(test)]
+mod screen_find_tests {
+    use super::screen_find_text;
+
+    #[test]
+    fn combined_text_caps_lines_and_notes_budget() {
+        let lines: Vec<String> = (1..=7).map(|i| format!("e{i} Button \"Save {i}\"")).collect();
+        let hits = vec![
+            ("w1 notepad.exe \"a.txt\"".to_string(), vec!["e9 MenuItem \"Save\"".to_string()], 1u64),
+            ("w2 chrome.exe \"Docs\"".to_string(), lines, 7u64),
+        ];
+        let t = screen_find_text("save", &hits, 4, 1, true);
+        assert!(t.starts_with("w1 notepad.exe \"a.txt\": 1 match(es)\n  e9 MenuItem \"Save\"\n"), "{t}");
+        assert!(t.contains("  e5 Button \"Save 5\"\n  … more: use find in that window"), "{t}");
+        assert!(!t.contains("Save 6"), "{t}");
+        assert!(t.contains("\"save\": 8 match(es) in 2 window(s); searched 4, 1 skipped"), "{t}");
+        assert!(t.contains("time budget reached"), "{t}");
+        let none = screen_find_text("zzz", &[], 6, 0, false);
+        assert!(none.contains("0 match(es) in 0 window(s); searched 6") && none.contains("ocr"), "{none}");
+    }
+}
+
+#[cfg(test)]
+mod open_app_tests {
+    use super::runs_code;
+    use std::path::Path;
+
+    #[test]
+    fn programs_and_scripts_are_not_opened_as_documents() {
+        for p in ["a.exe", "B.BAT", "c.ps1", "d.lnk", "e.msi", "f.vbs", "g.js", "h.url", "i.hta", "j.reg", "k.cmd"] {
+            assert!(runs_code(Path::new(p)), "{p}");
+        }
+        for p in ["report.xlsx", "notes.txt", "photo.png", "deck.pptx", "doc.pdf", "page.html", "README"] {
+            assert!(!runs_code(Path::new(p)), "{p}");
+        }
     }
 }

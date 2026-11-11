@@ -312,7 +312,9 @@ fn rules_and_log(data_dir: &Path) -> String {
     let path = data_dir.join("policy.json");
     let exists = path.exists();
     let p = Policy::load(&path);
-    let mut s = String::from("YOUR RULES\r\n");
+    // ADR 0064: routines first — they act on their own, so the user should see them.
+    let mut s = crate::routines::overview(data_dir);
+    s.push_str("YOUR RULES\r\n");
     s.push_str(&format!(
         "Policy file: {} {}\r\n",
         path.display(),

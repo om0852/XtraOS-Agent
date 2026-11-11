@@ -175,7 +175,12 @@ which this PC does not have.
 Windows): `routine.add` always asks the user; every N minutes (≥ 5) or daily at HH:MM; a
 missed run runs once; each run is the agent `routine:<name>` through the normal rules, logged,
 pausable from the tray; `routine.summary` is the daily summary; a routines file edited outside
-XtraOS waits for the user's OK. `p7m4_e2e` passes. Open: triggers other than time.
+XtraOS waits for the user's OK. `p7m4_e2e` passes. **Slice 2: built** (ADR 0064) — a
+`new_file_in {folder, pattern}` trigger runs the skill once per new file (settled 10 s, not an
+unfinished download, files already there never; `{file}`/`{name}` in the arguments); `notify`
+shows a Windows notification on failure (only when it starts failing or recovers), always or
+never; the "Rules and activity" window lists the routines. Checked live: only the one new
+.txt was processed, once.
 **P7-M2 housekeeping: built** (ADR 0054) — `files.duplicates` (byte-for-byte), `files.largest`,
 `files.organize` (by type or month) and `files.bulk_rename`; the last two preview first and move
 or rename only after the user approves the plan, in one undoable shell operation. Unit tests on
@@ -192,6 +197,23 @@ profile, so they cannot be verified. **Slice 3: built** (ADR 0062) — `office.p
 slide at the end or at `at`; a missing .pptx creates the deck; `save_as` never overwrites);
 `p7m1_e2e` checks it live with a real PowerPoint, including PDF export and that no PowerPoint
 process is left. Open: Outlook drafts.
+**P7-M10 everyday pack 2: built** (ADR 0068) — `window.snap` (halves, quarters, center,
+maximize on the window's own monitor), `files.recent` (changed lately in the real Desktop,
+Documents and Downloads, also under OneDrive), `files.read_text` (text files for MCP-only
+clients; binary refused), `disk.usage` (LOW under 10 % / 5 GB), `routine.pause / resume`.
+One interactive test, `everyday_e2e`, covers all five.
+**P7-M9 find on the whole screen: built** (ADR 0067) — `screen.find {query}` runs `find` on
+every open window (front first, within 5 s by default) and returns the matches per window
+with refs that work at once. `screen_e2e` passes; 2.1 s cold, 0.4 s warm over 4 windows.
+**P7-M8 reminders: built** (ADR 0066) — `notify.show {text, title?}` shows a Windows
+notification; a routine with `once_at` ("17:00" or "2026-11-12 09:30") runs once and is then
+removed, so a reminder is `routine.add {skill: "notify.show", once_at}` (approved by the user
+like any routine). A reminder missed while XtraOS was off runs once when it is back. Checked
+live: shown at its time, then gone from `routine.list`.
+**P7-M7 window layouts: built** (ADR 0065) — `layout.save {name, filter?}` remembers the open
+windows (position, size, maximized/minimized); `layout.restore {name}` puts the open ones back
+(same process, then the closest title), in the background, and reports the ones that are not
+open. `layouts_e2e` passes (back within 3 px; minimized stays minimized).
 **P7-M6 task checkpoints: built** (ADR 0057) — `task.save / load / list / done` keep a long
 task's progress in XtraOS's own data folder so another agent or session can resume; a state
 with a credential-looking key is refused. Checked live: saved by one client, loaded by another.

@@ -116,7 +116,16 @@ async fn win01_launch_list_bounds_states_focus_close() {
         !after.iter().any(|x| x["ref"] == r),
         "window still listed after close"
     );
-    let r2 = core.call("focus_window", json!({"window": r})).await;
+    // Right after a close Windows may keep the handle alive a moment (then focus says
+    // NEEDS_HUMAN); within 2 s the ref must be gone.
+    let mut r2 = core.call("focus_window", json!({"window": r})).await;
+    for _ in 0..20 {
+        if code(&r2) == "WINDOW_NOT_FOUND" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        r2 = core.call("focus_window", json!({"window": r})).await;
+    }
     assert_eq!(code(&r2), "WINDOW_NOT_FOUND", "{r2}");
     core.stop().await;
 }

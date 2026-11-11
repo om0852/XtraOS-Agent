@@ -71,3 +71,93 @@ async fn p7m4_routines() {
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&work_dir);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "interactive: starts the safety UI; takes ~15 s (files must settle 10 s)"]
+async fn p7m4_new_file_trigger() {
+    let home = std::env::temp_dir().join(format!("xtraos-routines-nf-{}", std::process::id()));
+    let inbox = std::env::temp_dir().join(format!("xtraos-routines-inbox-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&inbox);
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&inbox).unwrap();
+    std::fs::write(inbox.join("already-here.txt"), "old").unwrap();
+    // SAFETY: set before the core starts and before any other thread reads it.
+    unsafe { std::env::set_var("XTRAOS_HOME", &home) };
+    let mut base = Core::start().await;
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // For each new *.txt: files.find in the inbox for exactly that name ({name} substituted).
+    let r = routines::from_args(
+        &json!({"name": "inbox", "skill": "files.find", "args": {"path": inbox.display().to_string(), "pattern": "{name}"},
+                "new_file_in": inbox.display().to_string(), "pattern": "*.txt", "notify": "never"}),
+        routines::local_now_ms(),
+        "test",
+    )
+    .unwrap();
+    routines::add_approved(r).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::fs::write(inbox.join("new-report.txt"), "new").unwrap();
+    std::fs::write(inbox.join("big.txt.crdownload"), "partial").unwrap();
+    std::fs::write(inbox.join("photo.jpg"), "jpg").unwrap();
+
+    // Not settled yet (written < 10 s ago): nothing runs.
+    let ran = tokio::task::spawn_blocking(|| routines::run_due(routines::local_now_ms())).await.unwrap();
+    assert!(ran.is_empty(), "{ran:?}");
+    tokio::time::sleep(std::time::Duration::from_secs(11)).await;
+    let ran = tokio::task::spawn_blocking(|| routines::run_due(routines::local_now_ms())).await.unwrap();
+    assert_eq!(ran, vec!["inbox".to_string()], "only new-report.txt: not the old file, the download or the jpg");
+    let again = tokio::task::spawn_blocking(|| routines::run_due(routines::local_now_ms())).await.unwrap();
+    assert!(again.is_empty(), "each file once");
+
+    let sum = base.ok("run_skill", json!({"name": "routine.summary"})).await;
+    let t = sum["text"].as_str().unwrap();
+    assert!(t.contains("inbox: 1 run(s), 0 failed") && t.contains("new-report.txt"), "{t}");
+    assert!(!t.contains("already-here"), "{t}");
+    let l = base.ok("run_skill", json!({"name": "routine.list"})).await;
+    assert!(l["text"].as_str().unwrap().contains("for each new *.txt file in"), "{l}");
+    base.ok("run_skill", json!({"name": "routine.remove", "args": {"name": "inbox"}})).await;
+    base.stop().await;
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&inbox);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "interactive: shows one Windows notification"]
+async fn p7m4_one_time_reminder() {
+    let home = std::env::temp_dir().join(format!("xtraos-routines-once-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    // SAFETY: set before the core starts and before any other thread reads it.
+    unsafe { std::env::set_var("XTRAOS_HOME", &home) };
+    let mut base = Core::start().await;
+
+    let now = routines::local_now_ms();
+    let at = routines::show_time(now + 2 * 60_000);
+    let r = routines::from_args(
+        &json!({"name": "call-bank", "skill": "notify.show", "args": {"text": "XtraOS test reminder: call the bank"}, "once_at": at, "notify": "never"}),
+        now,
+        "test",
+    )
+    .unwrap();
+    routines::add_approved(r).unwrap();
+    let l = base.ok("run_skill", json!({"name": "routine.list"})).await;
+    assert!(l["text"].as_str().unwrap().contains(&format!("call-bank: notify.show once at {at}")), "{l}");
+
+    // Not yet; then at its time (the tick's clock is passed in) it runs once and is removed.
+    let ran = tokio::task::spawn_blocking(move || routines::run_due(now + 30_000)).await.unwrap();
+    assert!(ran.is_empty(), "{ran:?}");
+    let ran = tokio::task::spawn_blocking(move || routines::run_due(now + 3 * 60_000)).await.unwrap();
+    assert_eq!(ran, vec!["call-bank".to_string()]);
+    let l = base.ok("run_skill", json!({"name": "routine.list"})).await;
+    assert_eq!(l["routines"].as_array().unwrap().len(), 0, "removed after its run: {l}");
+    let sum = base.ok("run_skill", json!({"name": "routine.summary"})).await;
+    let t = sum["text"].as_str().unwrap();
+    assert!(t.contains("call-bank: 1 run(s), 0 failed") && t.contains("notification shown"), "{t}");
+
+    // A past time is refused when adding.
+    let e = base.call("run_skill", json!({"name": "routine.add", "args": {"name": "late", "skill": "notify.show", "args": {"text": "x"}, "once_at": "2020-01-01 09:00"}})).await;
+    assert_eq!(common::code(&e), "INVALID_ARGS", "{e}");
+    base.stop().await;
+    let _ = std::fs::remove_dir_all(&home);
+}

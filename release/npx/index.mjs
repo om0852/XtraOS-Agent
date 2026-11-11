@@ -56,5 +56,7 @@ async function main() {
 
 main().catch((e) => {
   console.error(`xtraos-install: ${e.message}`);
-  process.exit(1);
+  // Set the code and let Node finish: process.exit() while a fetch connection is still closing
+  // trips a libuv assertion on Windows (seen: "UV_HANDLE_CLOSING", exit code 9).
+  process.exitCode = 1;
 });

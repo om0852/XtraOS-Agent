@@ -118,7 +118,7 @@ pub fn profile_name(client: &str) -> String {
     })
 }
 
-fn is_read(method: &str, p: &Value) -> bool {
+pub(crate) fn is_read(method: &str, p: &Value) -> bool {
     let skill_observe = method == "run_skill"
         && crate::skills::plan(p).is_ok_and(|pl| pl.is_macro || pl.class == crate::policy::Class::Observe);
     is_read_method(method, p, skill_observe)
@@ -134,12 +134,20 @@ pub fn enforce(method: &str, p: &Value) -> Result<(), ActError> {
     let read = is_read(method, p);
     let stored = with_stored(|m| m.clone());
     let rule = crate::safety::with_policy(|s| resolve(&s.policy, &stored, &client)).0;
-    let rule = match rule {
+    let mut rule = match rule {
         Some(r) => r,
         // Reading is fine until the user decides; the first change asks.
         None if read => ClientRule { profile: Profile::ReadOnly, apps: None },
         None => ask(&client, method)?,
     };
+    // ADR 0073: the organisation's profile for this client, when stricter, wins.
+    if let crate::team::State::Active(t) = crate::team::current() {
+        if let Some(tp) = t.client(&client) {
+            if crate::team::rank(tp) > crate::team::rank(rule.profile) {
+                rule.profile = tp;
+            }
+        }
+    }
     if let Some(why) = refusal(rule.profile, method, read) {
         return Err(crate::safety::blocked(why));
     }

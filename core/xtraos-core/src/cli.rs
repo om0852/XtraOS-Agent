@@ -98,8 +98,13 @@ fn connect() -> Result<(std::fs::File, String), String> {
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         keep_std_handles_private();
-        std::process::Command::new(&exe)
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+        let mut cmd = std::process::Command::new(&exe);
+        // Its own folder as working directory: the long-running core must not hold the caller's
+        // folder (an extracted bundle or a project could not be deleted while it runs).
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

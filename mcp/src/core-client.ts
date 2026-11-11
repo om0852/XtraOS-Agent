@@ -113,7 +113,9 @@ export class CoreClient {
       this.lastAutostart = Date.now();
       // Detached and hidden: the core lives in the user's session (tray icon, kill switch)
       // and outlives this MCP server.
-      spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      // Its own folder as working directory: the long-running core must not hold the client's
+      // folder (a project or an extracted bundle could not be deleted while it runs).
+      spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true, cwd: path.dirname(exe) }).unref();
       const deadline = Date.now() + 10_000;
       for (;;) {
         await new Promise((r) => setTimeout(r, 200));

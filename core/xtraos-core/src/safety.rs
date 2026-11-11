@@ -750,6 +750,14 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
     }
     // P8-M2 (ADR 0060): what this agent client may do at all.
     crate::clients::enforce(method, p)?;
+    // ADR 0073: a team policy that is present but does not verify blocks every acting call.
+    if let crate::team::State::Broken(why) = crate::team::current() {
+        if !crate::clients::is_read(method, p) {
+            return Err(blocked(format!(
+                "your organisation's team policy could not be verified ({why}); only reading is allowed until an administrator fixes it"
+            )));
+        }
+    }
     if HITL_METHODS.contains(&method) {
         return Ok(Approval {
             decision: "allow",
@@ -787,6 +795,11 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
     } else {
         None
     };
+    // ADR 0073: the organisation's signed team policy is a floor (stricter wins).
+    let team = match crate::team::current() {
+        crate::team::State::Active(t) => Some(t),
+        _ => None,
+    };
     let ((decision, reason, what, rate, task), _note) = with_policy(|s| {
         let (mut f, mut what) = gather(method, p);
         if let Some(pl) = &skill {
@@ -794,14 +807,14 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
             f.skill_class = Some(pl.class);
             what = pl.what.clone();
         }
-        let (d, why) = s.policy.decide(&f);
-        (
-            d,
-            why,
-            what,
-            s.policy.rate_per_minute,
-            (s.policy.max_actions_per_task, s.policy.task_idle_minutes),
-        )
+        let (mut d, mut why) = s.policy.decide(&f);
+        let (mut rate, mut max_task) = (s.policy.rate_per_minute, s.policy.max_actions_per_task);
+        if let Some(t) = &team {
+            (d, why) = crate::team::stricter((d, why), t.decide(&f));
+            rate = rate.min(t.rate_per_minute.unwrap_or(u32::MAX));
+            max_task = max_task.min(t.max_actions_per_task.unwrap_or(u32::MAX));
+        }
+        (d, why, what, rate, (max_task, s.policy.task_idle_minutes))
     });
     {
         let mut g = RATE.lock().unwrap_or_else(|e| e.into_inner());

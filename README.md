@@ -32,9 +32,12 @@ calls.*
 ## Quick start
 
 **Needs:** 64-bit Windows 10 2004+ or Windows 11. This preview is not code-signed yet, so
-Windows' *Smart App Control* must be off. A prebuilt download is coming to Releases; for now
-build it once with [Rust](https://rustup.rs) (the pinned toolchain installs itself), the
-Visual Studio C++ Build Tools and Node.js 24. The built bundle carries its own Node.js.
+Windows' *Smart App Control* must be off.
+
+Once a release is published: `npx xtraos-install` (downloads the release from GitHub, checks
+its SHA-256, installs per user). Until then, build it once with [Rust](https://rustup.rs) (the
+pinned toolchain installs itself), the Visual Studio C++ Build Tools and Node.js 24. The built
+bundle carries its own Node.js.
 
 1. Build the bundle:
    ```powershell

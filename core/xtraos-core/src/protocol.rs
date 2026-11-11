@@ -221,6 +221,8 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                     else { "running" },
                 // P8-M3 (ADR 0061): agents connected now (and ended in the last 10 min).
                 "agents": crate::agents::status_json(),
+                // ADR 0073: the organisation's team policy (null: none).
+                "team": crate::team::status_json(),
                 "uptime_ms": ctx.started.elapsed().as_millis() as u64,
                 "pipe": ctx.pipe,
                 "stopped": crate::safety::stopped(),

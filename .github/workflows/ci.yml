@@ -1,0 +1,38 @@
+# CI (ADR 0071): unit tests of the core, MCP typecheck and tests, on every push and pull request.
+# Interactive tests (real mouse/keyboard, Office, testbed windows) do not run here: they need a
+# desktop session and are run by hand (tests/README, `cargo test -- --ignored`).
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Rust toolchain (pinned in rust-toolchain.toml)
+        run: rustup show
+      - name: Core unit tests
+        working-directory: core
+        run: cargo test --lib
+      - name: Core debug build (the MCP end-to-end tests start it)
+        working-directory: core
+        run: cargo build
+      - name: MCP install
+        working-directory: mcp
+        run: npm ci
+      - name: MCP typecheck
+        working-directory: mcp
+        run: npm run typecheck
+      - name: MCP tests
+        working-directory: mcp
+        run: npm test
+      - name: npx installer tests
+        working-directory: release/npx
+        run: npm test

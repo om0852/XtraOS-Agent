@@ -75,6 +75,35 @@ stays byte for byte.
 `/mnt/c/Users/<you>/AppData/Local/Programs/XtraOS/bin/xtraos-core.exe call status`. Not
 verified yet.
 
+## Clients that only speak HTTP
+
+Start the MCP server with a local HTTP endpoint (ADR 0072):
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\XtraOS\xtraos-mcp.cmd" --http --port 8765
+```
+
+- URL: `http://127.0.0.1:8765/mcp` (Streamable HTTP, stateless). It is never reachable from
+  another computer.
+- Every request needs `Authorization: Bearer <token>`; the token is in
+  `%LOCALAPPDATA%\XtraOS\http.token`.
+- Requests from web pages (with an `Origin` header) are refused.
+- The core sees this client as `mcp-http`, so `policy.json` can limit it like any agent.
+
+## Rules from your organisation
+
+An administrator can set rules that users and agents cannot loosen (ADR 0073):
+
+```powershell
+xtraos-core --team-keygen C:\admin\keys                        # once: a key pair
+xtraos-core --team-sign policy.json --key C:\admin\keys\<id>.key --out team-policy.json
+```
+
+Copy `team-policy.json` to `%ProgramData%\XtraOS\` and `<id>.pub` to
+`%ProgramData%\XtraOS\team-keys\` on each PC (as administrator). The stricter of the user's
+and the organisation's rules always wins; a team policy that does not verify blocks acting
+calls until it is fixed. `status` shows it.
+
 ## Limit what an agent may do
 
 In `policy.json` (tray → Rules and activity → Open policy.json). XtraOS asks you to approve

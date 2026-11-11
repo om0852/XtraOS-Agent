@@ -118,8 +118,15 @@ every command in it was re-run against a core (2026-11-11); an unknown tool now 
 "unknown tool 'x'" with a pointer to the list. **P5-M9 integration guide: built** —
 `docs/10-integration-guide.md` with a compatibility matrix; verified: Claude Code (MCP) and the
 command line; the other 8 clients are config tested, live runs pending.
-Open: P5-M1 release, P5-M2 signing, P5-M4 registries, P5-M5 WSL, P5-M8 (owner decision),
-live runs per client (P5-M9), the OpenClaw install run (P5-M6).
+**P5-M1 / M2 / M4 / M8: built as far as code goes** (ADR 0071, 0072) — CI and a release
+workflow that makes a draft GitHub Release (zip, checksums, winget manifests that pass
+`winget validate`); `npx xtraos-install` (downloads only from this repository's releases,
+refuses a checksum mismatch); `release/sign.ps1` (thumbprint or PFX); SDKs ready to publish with
+an owner-triggered workflow; `xtraos-mcp --http` on 127.0.0.1 with its own token (CLAUDE.md §4
+amended). Found and fixed on the way: an auto-started core kept the caller's folder as its
+working directory (a project or an extracted bundle could not be deleted); it now runs from its
+own folder. Open (owner): publish the first release, a code-signing certificate, npm org and
+PyPI publishing; WSL (P5-M5), live runs per client (P5-M9), the OpenClaw install run (P5-M6).
 
 ## Phase 6 — Reliable daily driver
 
@@ -197,6 +204,11 @@ profile, so they cannot be verified. **Slice 3: built** (ADR 0062) — `office.p
 slide at the end or at `at`; a missing .pptx creates the deck; `save_as` never overwrites);
 `p7m1_e2e` checks it live with a real PowerPoint, including PDF export and that no PowerPoint
 process is left. Open: Outlook drafts.
+**P7-M11 local vision: built** (ADR 0070) — `vision.colors` (colour shares + a letter grid
+map), `vision.regions` (coloured shapes with box, centre and a shape hint), `vision.find_image`
+(where a saved icon is), `vision.snip` (save an area as PNG); with `window` + `region` they read
+a covered window. On the owner's PC: 85 / 241 / 21 tokens instead of ~995 for a screenshot, and
+`ocr {window, query}` read the VS Code chat line in 31 tokens instead of ~1,004.
 **P7-M10 everyday pack 2: built** (ADR 0068) — `window.snap` (halves, quarters, center,
 maximize on the window's own monitor), `files.recent` (changed lately in the real Desktop,
 Documents and Downloads, also under OneDrive), `files.read_text` (text files for MCP-only
@@ -245,7 +257,11 @@ already running, get `STOPPED` while the others keep working, and its `status.st
 `paused`. Pause/resume come only from the tray menu. The "Rules and activity" window shows a
 live "Agents now" section (it pairs as `xtraos-viewer`, its polls are not logged, and a
 "viewer" that acts is listed like any agent). Interactive `p8m3_e2e` passes; the tray submenu
-needs a real click and was not exercised by a test. Open: P8-M4 team policies (owner's org
+needs a real click and was not exercised by a test. **P8-M4 team policies: built** (ADR 0073)
+— an organisation signs `team-policy.json` with its key (`xtraos-core --team-keygen`,
+`--team-sign`); the core verifies it with Windows CNG and applies it as a floor: the stricter of
+the user's and the team's decision, profile and limits wins; a file that does not verify blocks
+acting calls (reading still works); `status.team` shows it. `team_e2e` passes. Earlier note: P8-M4 team policies (owner's org
 model).
 
 ## Working agreement

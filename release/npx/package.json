@@ -1,0 +1,22 @@
+{
+  "name": "xtraos-install",
+  "version": "0.1.0",
+  "description": "Installs XtraOS Agent on Windows from its GitHub Release (checksum-verified): npx xtraos-install",
+  "type": "module",
+  "bin": {
+    "xtraos-install": "index.mjs"
+  },
+  "files": ["index.mjs", "lib.mjs", "README.md"],
+  "os": ["win32"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/om0852/XtraOS-Agent.git",
+    "directory": "release/npx"
+  },
+  "keywords": ["xtraos", "ai-agent", "mcp", "windows", "installer"]
+}

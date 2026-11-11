@@ -39,6 +39,9 @@ From WSL (not verified yet): call the .exe by its Windows path through interop, 
    `type {"window":"w..","text":"..."}` and `press_keys {"window":"w..","keys":["Ctrl+S"]}` borrow
    the window while the user is idle.
 5. Prefer `find {"window":"w..","query":"Save"}`, `read_text` and `wait_for` over screenshots.
+   To check a picture without sending it to your model: `vision.colors` / `vision.regions`
+   (colours and shapes as text, ~100–250 tokens instead of ~1,000), `vision.find_image` (where an
+   icon is), `ocr {"window":…, "query":…}` (just the matching text).
    Not sure which window? `run_skill {"name":"screen.find","args":{"query":"Save"}}` searches all.
    Use `screenshot` or `ocr` only when observe says the window is opaque (games, canvas).
 6. `batch {"steps":[{"tool":"click","args":{"ref":"e12"}}, ...]}` runs up to 50 steps in one call.

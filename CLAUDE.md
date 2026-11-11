@@ -52,7 +52,10 @@ Code that disagrees with these documents is a bug, unless an ADR changes the doc
   Elevation always requires a human click.
 - No typing of passwords, payment data, or government IDs by the agent. Credential fields are
   detected and handed to the human.
-- No remote/network control: the core listens on local IPC only, paired by token.
+- No remote/network control: the core listens on local IPC only, paired by token. The single
+  exception (owner decision, ADR 0072): the MCP server may serve MCP over HTTP when started
+  with `--http`, bound to 127.0.0.1 only, with its own bearer token, Host checked and browser
+  Origins refused. Never another address, never on by default.
 - No hidden operation: while automation runs, the overlay is visible and the kill switch works.
 - No disabling of the kill switch, policy engine, or action log, even for tests in release builds.
 

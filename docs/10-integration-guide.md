@@ -27,6 +27,7 @@ real session of that client used XtraOS.
 | Cline | MCP | config tested | pending |
 | Codex CLI | MCP (`~/.codex/config.toml`) | config tested | pending |
 | Gemini CLI | MCP (`~/.gemini/settings.json`) | config tested | pending |
+| Antigravity (app 2.3.1) | MCP (`~/.gemini/antigravity/mcp_config.json`) | not written by `setup` yet (entry added by hand) | **verified** — 2026-11-11: asked to call `status` and `list_windows`, it answered core 0.1.1 and the same 5 windows XtraOS listed |
 | Hermes Agent | MCP (`hermes mcp`) or the skill | config tested | pending |
 | OpenClaw | the skill (command line) | — | pending |
 | Agents inside WSL2 | command line through Windows interop | — | pending (P5-M5) |
@@ -64,6 +65,11 @@ comments is left untouched; `setup` prints the snippet to paste instead.
 stays byte for byte.
 
 **Gemini CLI.** An `mcpServers.xtraos` entry in `~/.gemini/settings.json`.
+
+**Antigravity.** The Antigravity app (not the separate Antigravity IDE, whose folder has no MCP
+config) reads `mcpServers` from `~/.gemini/antigravity/mcp_config.json`. Add the same `xtraos`
+entry there by hand and restart the app. The live run was driven by XtraOS itself: clicking
+"Send message" showed the user the approval dialog, as every message send does.
 
 **Hermes Agent.** `setup --apply` runs `hermes mcp add` (an existing entry is removed first;
 `config.yaml` is backed up). Hermes can also use the skill instead of MCP.

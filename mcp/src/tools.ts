@@ -678,13 +678,17 @@ export const TOOLS: ToolDef[] = [
       'and points are saved as locators (app + window title + element role/name, window-relative points) so replay ' +
       'works after windows move; a missing window/element fails that step (never guesses). Typed text becomes an ' +
       'argument (value1/text1…) you can change at replay. Password fields are never recorded. Max 50 steps, 30 min. ' +
-      'op=status / discard.',
+      'op=status / discard. Bug report: start with report:true → every action (also FAILED ones) gets a line + ' +
+      'screenshot; op=note {text} adds what you observed (expected vs actual); stop writes report.md in ' +
+      'Documents\\XtraOS reports.',
     inputSchema: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['start', 'stop', 'status', 'discard'] },
+        op: { type: 'string', enum: ['start', 'stop', 'status', 'discard', 'note'] },
         name: { type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$' },
         overwrite: { type: 'boolean' },
+        report: { type: 'boolean', description: 'start: also write a bug report (steps, screenshots, notes)' },
+        text: { type: 'string', maxLength: 1000, description: 'note: your observation' },
       },
       required: ['op'],
       additionalProperties: false,

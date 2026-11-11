@@ -184,8 +184,11 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
                     } else {
                         let pending = crate::recorder::prepare(&m, &params);
                         let r = crate::exec::dispatch(&m, &params);
-                        if let (Ok(_), Some(step)) = (&r, pending) {
-                            crate::recorder::commit(step);
+                        match (&r, pending) {
+                            (Ok(_), Some(step)) => crate::recorder::commit(step),
+                            // A bug report also keeps failed steps (ADR 0053).
+                            (Err(e), Some(step)) => crate::recorder::failed(step, e),
+                            _ => {}
                         }
                         r
                     };

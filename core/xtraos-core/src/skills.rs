@@ -101,6 +101,12 @@ pub const BUILTINS: &[Builtin] = &[
         class: Class::Delete,
     },
     Builtin {
+        name: "dev.check",
+        args: "window, expect[{text|no_text|element(+role)|title}], timeout_ms?, screenshot_on_fail?",
+        about: "UI check of an app: PASS/FAIL per expectation, retried until timeout (3 s); a failure saves a screenshot",
+        class: Class::Observe,
+    },
+    Builtin {
         name: "whatsapp.send",
         args: "phone, text?, file?, keep_open?",
         about: "send a message/file on WhatsApp Web (asks the user first; checks the chat is that number)",
@@ -382,6 +388,15 @@ pub fn plan(p: &Value) -> Result<Plan, ActError> {
                         .unwrap_or_default()
                 )
             }
+            "dev.check" => {
+                let n = parse_expect(&args)?.len();
+                let w = args.get("window").ok_or_else(|| bad("'window' is required"))?;
+                let h = crate::perceive::check_window(w)?;
+                format!(
+                    "check {n} expectation(s) in \"{}\"",
+                    crate::perceive::clip(&crate::winmgr::title(h), 50)
+                )
+            }
             _ => b.name.to_string(),
         };
         let class = if b.name == "whatsapp.send" && args.get("file").is_some_and(|f| !f.is_null()) {
@@ -434,8 +449,281 @@ pub fn run(p: &Value, log: &mut dyn FnMut(crate::exec::StepLog)) -> Result<Value
         "files.rename" => rename(&args),
         "files.delete" => delete(&args),
         "whatsapp.send" => whatsapp_send(&args),
+        "dev.check" => dev_check(&args),
         n => Err(bad(format!("unknown skill '{n}'"))),
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// dev.check (P7-M3, ADR 0052)
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Expect {
+    Text(String),
+    NoText(String),
+    /// An element whose name contains `name` (role exact when given); optionally its value
+    /// contains `value` and its enabled state is `enabled`.
+    Element {
+        name: String,
+        role: Option<String>,
+        value: Option<String>,
+        enabled: Option<bool>,
+    },
+    Title(String),
+    /// The window visibly changed during the check (frame_diff, ≥ `min_pct` % of the window;
+    /// default 0.1: above a blinking caret, below a small text update).
+    Changed { min_pct: f64 },
+}
+
+impl Expect {
+    fn label(&self) -> String {
+        match self {
+            Expect::Text(t) => format!("text \"{}\"", crate::perceive::clip(t, 60)),
+            Expect::NoText(t) => format!("no text \"{}\"", crate::perceive::clip(t, 60)),
+            Expect::Element { name, role, value, enabled } => format!(
+                "element {}\"{}\"{}{}",
+                role.as_ref().map(|r| format!("{r} ")).unwrap_or_default(),
+                crate::perceive::clip(name, 60),
+                value.as_ref().map(|v| format!(" = \"{}\"", crate::perceive::clip(v, 40))).unwrap_or_default(),
+                match enabled {
+                    Some(true) => " enabled",
+                    Some(false) => " disabled",
+                    None => "",
+                }
+            ),
+            Expect::Title(t) => format!("title \"{}\"", crate::perceive::clip(t, 60)),
+            Expect::Changed { .. } => "window changed".into(),
+        }
+    }
+}
+
+/// `expect` → checks; every entry needs exactly one of text / no_text / element / title /
+/// changed. `value` and `enabled` refine an element check.
+pub fn parse_expect(args: &Value) -> Result<Vec<Expect>, ActError> {
+    let list = args
+        .get("expect")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty() && a.len() <= 20)
+        .ok_or_else(|| bad("'expect' is required: 1..20 checks like {\"text\":\"Saved\"}"))?;
+    list.iter()
+        .map(|e| {
+            let s = |k: &str| {
+                e.get(k)
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.trim().is_empty())
+                    .map(String::from)
+            };
+            let given = ["text", "no_text", "element", "title", "changed"]
+                .iter()
+                .filter(|k| e.get(**k).is_some())
+                .count();
+            if given != 1 {
+                return Err(bad(
+                    "each check needs exactly one of text, no_text, element (+ role, value, enabled), title, changed",
+                ));
+            }
+            if e.get("changed").is_none() && e.get("min_pct").is_some() {
+                return Err(bad("'min_pct' goes with 'changed'"));
+            }
+            if e.get("element").is_none() && (e.get("value").is_some() || e.get("enabled").is_some()) {
+                return Err(bad("'value' and 'enabled' go with 'element'"));
+            }
+            Ok(if let Some(t) = s("text") {
+                Expect::Text(t)
+            } else if let Some(t) = s("no_text") {
+                Expect::NoText(t)
+            } else if let Some(n) = s("element") {
+                let enabled = match e.get("enabled") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_bool().ok_or_else(|| bad("'enabled' must be true or false"))?),
+                };
+                let value = match e.get("value") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_str().map(String::from).ok_or_else(|| bad("'value' must be a string"))?),
+                };
+                Expect::Element { name: n, role: s("role"), value, enabled }
+            } else if let Some(t) = s("title") {
+                Expect::Title(t)
+            } else if e.get("changed") == Some(&Value::Bool(true)) {
+                let min_pct = match e.get("min_pct") {
+                    None | Some(Value::Null) => 0.1,
+                    Some(v) => v
+                        .as_f64()
+                        .filter(|p| (0.01..=100.0).contains(p))
+                        .ok_or_else(|| bad("'min_pct' must be 0.01..=100"))?,
+                };
+                Expect::Changed { min_pct }
+            } else {
+                return Err(bad("a check's text must be a non-empty string ('changed' must be true)"));
+            })
+        })
+        .collect()
+}
+
+/// One check against what the window shows (pure): (pass, detail). `changed`: the window
+/// visibly changed since the check started.
+pub fn verdict(
+    e: &Expect,
+    text: &str,
+    els: &[crate::perceive::ElemView],
+    title: &str,
+    changed: bool,
+) -> (bool, String) {
+    let low = text.to_lowercase();
+    let clip = crate::perceive::clip;
+    match e {
+        Expect::Text(t) => {
+            let ok = low.contains(&t.to_lowercase());
+            (ok, if ok { "found".into() } else { "not in the window's text".into() })
+        }
+        Expect::NoText(t) => {
+            let ok = !low.contains(&t.to_lowercase());
+            (ok, if ok { "absent".into() } else { "present in the window's text".into() })
+        }
+        Expect::Element { name, role, value, enabled } => {
+            let n = name.to_lowercase();
+            let role_ok = |r: &str| role.as_ref().is_none_or(|x| x.eq_ignore_ascii_case(r));
+            let named: Vec<&crate::perceive::ElemView> = els
+                .iter()
+                .filter(|v| v.name.to_lowercase().contains(&n) && role_ok(v.role))
+                .collect();
+            if named.is_empty() {
+                let same: Vec<String> = els
+                    .iter()
+                    .filter(|v| !v.name.is_empty() && role_ok(v.role))
+                    .take(5)
+                    .map(|v| format!("{} \"{}\"", v.role, clip(&v.name, 30)))
+                    .collect();
+                return (false, if same.is_empty() { "no such element".into() } else { format!("not found; e.g. {}", same.join(", ")) });
+            }
+            let state_ok = |v: &crate::perceive::ElemView| {
+                value.as_ref().is_none_or(|want| {
+                    v.value.as_deref().is_some_and(|got| got.to_lowercase().contains(&want.to_lowercase()))
+                }) && enabled.is_none_or(|want| v.enabled == want)
+            };
+            match named.iter().find(|v| state_ok(v)) {
+                Some(v) => (true, format!("{} \"{}\"{}", v.role, clip(&v.name, 40), v.value.as_ref().map(|x| format!(" = \"{}\"", clip(x, 40))).unwrap_or_default())),
+                None => {
+                    let v = named[0];
+                    (false, format!(
+                        "{} \"{}\" is{}{}",
+                        v.role,
+                        clip(&v.name, 40),
+                        match &v.value { Some(x) => format!(" = \"{}\"", clip(x, 40)), None => " (no value)".into() },
+                        if v.enabled { ", enabled" } else { ", disabled" }
+                    ))
+                }
+            }
+        }
+        Expect::Title(t) => {
+            let ok = title.to_lowercase().contains(&t.to_lowercase());
+            (ok, if ok { "matches".into() } else { format!("title is \"{}\"", clip(title, 60)) })
+        }
+        Expect::Changed { .. } => (changed, if changed { "changed".into() } else { "no visible change".into() }),
+    }
+}
+
+fn dev_check(args: &Value) -> Result<Value, ActError> {
+    let checks = parse_expect(args)?;
+    let h = crate::perceive::check_window(args.get("window").ok_or_else(|| bad("'window' is required"))?)?;
+    let timeout = std::time::Duration::from_millis(
+        args.get("timeout_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(3_000)
+            .min(30_000),
+    );
+    let shot = args
+        .get("screenshot_on_fail")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let t0 = std::time::Instant::now();
+    // `changed`: a fresh frame baseline now; any later frame that differs latches it.
+    let wref = crate::winmgr::window_ref(h);
+    let change_pct = checks.iter().find_map(|c| match c {
+        Expect::Changed { min_pct } => Some(*min_pct),
+        _ => None,
+    });
+    let want_change = change_pct.is_some();
+    // A window that cannot be captured right now (minimized) fails only the `changed` check,
+    // with the reason; the baseline is retried while the check runs.
+    let mut baseline: Result<(), String> = Err("not taken".into());
+    let mut changed = false;
+    let results = loop {
+        crate::safety::check()?;
+        if !crate::winmgr::exists(h) {
+            return Err(ActError {
+                code: "WINDOW_NOT_FOUND",
+                message: "the window closed during the check".into(),
+                hint: "list_windows, then check again.",
+            });
+        }
+        if want_change && !changed {
+            if baseline.is_err() {
+                baseline = crate::framediff::frame_diff(&json!({"window": wref, "reset": true, "min_pct": change_pct}))
+                    .map(|_| ())
+                    .map_err(|e| e.message);
+            } else {
+                changed = crate::framediff::frame_diff(&json!({"window": wref, "min_pct": change_pct}))
+                    .map(|r| r["changed"] == true)
+                    .unwrap_or(false);
+            }
+        }
+        let (text, els) = crate::perceive::check_view(h)?;
+        let title = crate::winmgr::title(h);
+        let r: Vec<(String, bool, String)> = checks
+            .iter()
+            .map(|c| {
+                let (ok, mut d) = verdict(c, &text, &els, &title, changed);
+                if let (Expect::Changed { .. }, Err(why)) = (c, &baseline) {
+                    d = format!("could not watch the window: {why}");
+                }
+                (c.label(), ok, d)
+            })
+            .collect();
+        if r.iter().all(|x| x.1) || t0.elapsed() >= timeout {
+            break r;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    };
+    let pass = results.iter().all(|x| x.1);
+    let mut shot_path = None;
+    if !pass && shot {
+        if let Ok((img, _, _)) = crate::capture::grab(&json!({"window": crate::winmgr::window_ref(h)})) {
+            let (w, hh, rgb) = crate::capture::downscale_rgb(&img, 1.0);
+            if let Ok(png) = crate::capture::png_rgb(w, hh, &rgb) {
+                let dir = std::env::temp_dir().join("xtraos-checks");
+                let file = dir.join(format!(
+                    "check-{}.png",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0)
+                ));
+                if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&file, png).is_ok() {
+                    shot_path = Some(file.display().to_string());
+                }
+            }
+        }
+    }
+    let mut lines: Vec<String> = results
+        .iter()
+        .map(|(l, ok, d)| format!("{} {l} — {d}", if *ok { "PASS" } else { "FAIL" }))
+        .collect();
+    let passed = results.iter().filter(|x| x.1).count();
+    lines.push(format!(
+        "-- {} {passed}/{} in {} ms{}",
+        if pass { "PASS" } else { "FAIL" },
+        results.len(),
+        t0.elapsed().as_millis(),
+        shot_path.as_ref().map(|p| format!("; screenshot {p}")).unwrap_or_default()
+    ));
+    Ok(json!({
+        "pass": pass,
+        "text": lines.join("\n"),
+        "checks": results.iter().map(|(l, ok, d)| json!({"check": l, "pass": ok, "detail": d})).collect::<Vec<_>>(),
+        "screenshot": shot_path,
+        "ms": t0.elapsed().as_millis() as u64,
+    }))
 }
 
 /// Macro args: declared names, required ones present, `${x}` replaced (a whole-string
@@ -1137,6 +1425,59 @@ mod tests {
         assert!(wildcard("rep?rt*", "report-final.pdf"));
         assert!(!wildcard("*.txt", "report.pdf"));
         assert!(wildcard("*", ""));
+    }
+
+    // P7-M3 (ADR 0052): dev.check
+    #[test]
+    fn dev_check_parses_and_judges() {
+        let e = parse_expect(&json!({"expect": [
+            {"text": "Saved"}, {"no_text": "Error"}, {"element": "Save", "role": "Button"}, {"title": "report"}
+        ]}))
+        .unwrap();
+        assert_eq!(e.len(), 4);
+        assert!(parse_expect(&json!({"expect": []})).is_err());
+        assert!(parse_expect(&json!({"expect": [{"text": "a", "title": "b"}]})).is_err(), "one kind each");
+        assert!(parse_expect(&json!({"expect": [{"text": ""}]})).is_err());
+        use crate::perceive::ElemView;
+        let el = |role: &'static str, name: &str, value: Option<&str>, enabled: bool| ElemView {
+            role,
+            name: name.into(),
+            value: value.map(String::from),
+            enabled,
+        };
+        let els = vec![
+            el("Button", "Save", None, true),
+            el("Edit", "Name", Some("Om"), true),
+            el("Text", "Total", Some("42.00"), true),
+            el("Button", "Delete", None, false),
+        ];
+        let text = "File SAVED at 10:00";
+        assert!(verdict(&e[0], text, &els, "report.txt", false).0, "case-insensitive text");
+        assert!(verdict(&e[1], text, &els, "", false).0);
+        assert!(!verdict(&Expect::NoText("saved".into()), text, &els, "", false).0);
+        assert!(verdict(&e[2], text, &els, "", false).0);
+        let missing = Expect::Element { name: "Cancel".into(), role: Some("Button".into()), value: None, enabled: None };
+        let (ok, d) = verdict(&missing, text, &els, "", false);
+        assert!(!ok && d.contains("Save"), "failure names what is there: {d}");
+        assert!(verdict(&e[3], text, &els, "Q3 Report.pdf", false).0);
+        let (ok, d) = verdict(&e[3], text, &els, "Untitled", false);
+        assert!(!ok && d.contains("Untitled"));
+
+        // Value, enabled state and visible change.
+        let x = parse_expect(&json!({"expect": [
+            {"element": "Total", "value": "42"}, {"element": "Delete", "enabled": false},
+            {"element": "Total", "value": "41"}, {"changed": true}
+        ]}))
+        .unwrap();
+        assert!(verdict(&x[0], "", &els, "", false).0, "value contains");
+        assert!(verdict(&x[1], "", &els, "", false).0, "disabled as expected");
+        let (ok, d) = verdict(&x[2], "", &els, "", false);
+        assert!(!ok && d.contains("42.00"), "shows the actual value: {d}");
+        assert!(!verdict(&x[3], "", &els, "", false).0);
+        assert!(verdict(&x[3], "", &els, "", true).0);
+        assert!(parse_expect(&json!({"expect": [{"text": "a", "value": "b"}]})).is_err(), "value needs element");
+        assert!(parse_expect(&json!({"expect": [{"element": "a", "enabled": "yes"}]})).is_err());
+        assert!(parse_expect(&json!({"expect": [{"changed": false}]})).is_err());
     }
 
     #[test]

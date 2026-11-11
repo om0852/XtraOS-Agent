@@ -146,8 +146,21 @@ Interactive `health01` passes.
 {kind: "notify"}` (Windows notification, ≤ 1 per 10 s; also used for critical health warnings),
 `launch_app` opens `chrome://`/`edge://` pages through the address bar. The P6-M6 user-interrupt
 stop was seen live (USER_ACTIVE while the owner used the PC). Interactive `p6m7_e2e` passes.
-Open: work beside the user v2, P6-M7 `wait`/`notify`, P6-M8 large
-lists, P6-M9 open human-run gates.
+Open: P6-M8 large lists (parked: re-measure on a quiet PC), P6-M9 open human-run gates, a clean
+hands-off run of all interactive suites.
+
+## Phase 7 — Everyday work
+
+Owner choice (2026-11-10): the **developer pack** first.
+**P7-M3 slice 1: built** (ADR 0052) — `run_skill dev.check` checks a window against several
+expectations (text, no text, element, title) and reports PASS/FAIL for each, retrying until a
+timeout and saving a screenshot on failure. Reading terminals verified: consoles, Windows
+Terminal and the VS Code editor work; the VS Code integrated terminal exposes no text.
+Interactive `p7m3_e2e` passes.
+**P7-M3 slice 2: built** (ADR 0053) — `record_session {op: start, report: true}` writes a
+"reproduce this bug" report to Documents\XtraOS reports: every action (failed ones too) with a
+screenshot of the app, `note` observations, versions and a replay hint. Interactive `p7m3b_e2e`
+passes. Open: installer/emulator flows.
 
 ## Working agreement
 

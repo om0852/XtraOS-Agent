@@ -828,6 +828,43 @@ pub fn ref_locator(v: &Value) -> Option<(HWND, &'static str, String, bool)> {
     })
 }
 
+/// `dev.check` (ADR 0052): a window resolved like every perception tool (XtraOS's own and
+/// elevated windows refused).
+pub fn check_window(v: &Value) -> Result<HWND, ActError> {
+    input::init_dpi();
+    target_window(&json!({ "window": v }))
+}
+
+/// One element as `dev.check` sees it (ADR 0052). Password values are never included.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ElemView {
+    pub role: &'static str,
+    pub name: String,
+    pub value: Option<String>,
+    pub enabled: bool,
+}
+
+/// `dev.check`: the window's text (visible text + document/terminal text) and the elements on
+/// screen. Chromium windows get the first-read wait (ADR 0048).
+pub fn check_view(h: HWND) -> Result<(String, Vec<ElemView>), ActError> {
+    let (nodes, _) = snapshot_settled(h, true)?;
+    let mut text = visible_text(&nodes);
+    text.push('\n');
+    text.push_str(&main_text(&nodes));
+    let els = nodes
+        .iter()
+        .skip(1)
+        .filter(|n| !n.chrome && n.info.rank().is_some())
+        .map(|n| ElemView {
+            role: n.info.role,
+            name: n.info.name.clone(),
+            value: if n.info.password { None } else { n.info.value.clone() },
+            enabled: n.info.enabled,
+        })
+        .collect();
+    Ok((text, els))
+}
+
 /// A ref for the element with exactly this role and name in a window (replay of recorded
 /// steps). Visible elements win over off-screen ones; none → ELEMENT_NOT_FOUND.
 pub fn locate_element(h: HWND, role: &str, name: &str) -> Result<String, ActError> {

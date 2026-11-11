@@ -7,7 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CoreClient } from './core-client.ts';
 import { CoreError } from './errors.ts';
-import { INSTRUCTIONS, TOOLS, listedTools, profileFrom } from './tools.ts';
+import { INSTRUCTIONS, TOOLS, listedTools, mcpClientName, profileFrom } from './tools.ts';
 
 import { main as setupMain } from './setup.ts';
 
@@ -53,6 +53,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     return errorResult('INTERNAL', e instanceof Error ? e.message : String(e), '');
   }
 });
+
+// P8-M2 (ADR 0060): pair as the MCP client itself (e.g. `mcp:claude-code`), so per-client
+// profiles and window locks tell Claude Code, Codex and others apart.
+server.oninitialized = () => core.setClientName(mcpClientName(server.getClientVersion()?.name));
 
 await server.connect(new StdioServerTransport());
 console.error(`[xtraos-mcp] ${VERSION} ready on stdio (tools: ${profile}, ${listed.length})`);

@@ -81,6 +81,8 @@ pub const ID_STOP: usize = 1001;
 pub const ID_RESUME: usize = 1002;
 pub const ID_QUIT: usize = 1003;
 pub const ID_VIEWER: usize = 1004;
+/// P8-M3: tray Agents submenu items (only through TrackPopupMenu, never WM_COMMAND).
+const ID_AGENT_BASE: usize = 1100;
 const HOTKEY_ID: i32 = 1;
 const OVERLAY_TIMER: usize = 1;
 pub const PROMPT_BUTTON_BASE: i32 = 100;
@@ -151,7 +153,8 @@ pub fn check() -> Result<(), ActError> {
     if stopped() {
         Err(stopped_err())
     } else {
-        Ok(())
+        // P8-M3 (ADR 0061): the user paused only this agent.
+        crate::agents::check_current()
     }
 }
 
@@ -402,8 +405,16 @@ pub fn policy_path() -> String {
     with_policy(|s| s.path().display().to_string()).0
 }
 
+/// The policy in force, without checking the file for changes (never shows a dialog).
+pub(crate) fn peek_policy<T>(f: impl FnOnce(&policy::Policy) -> T) -> T {
+    let mut g = POLICY.lock().unwrap_or_else(|e| e.into_inner());
+    let store =
+        g.get_or_insert_with(|| policy::Store::new(crate::pairing::data_dir().join("policy.json")));
+    f(&store.policy)
+}
+
 /// Runs `f` on the current policy; returns its result and a reload note (for the action log).
-fn with_policy<T>(f: impl FnOnce(&policy::Store) -> T) -> (T, Option<String>) {
+pub(crate) fn with_policy<T>(f: impl FnOnce(&policy::Store) -> T) -> (T, Option<String>) {
     let mut g = POLICY.lock().unwrap_or_else(|e| e.into_inner());
     let store =
         g.get_or_insert_with(|| policy::Store::new(crate::pairing::data_dir().join("policy.json")));
@@ -737,6 +748,8 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
             "Restart the XtraOS core in the user's desktop session.",
         ));
     }
+    // P8-M2 (ADR 0060): what this agent client may do at all.
+    crate::clients::enforce(method, p)?;
     if HITL_METHODS.contains(&method) {
         return Ok(Approval {
             decision: "allow",
@@ -1513,8 +1526,21 @@ unsafe fn tray_menu(h: WHWND) {
         ID_RESUME,
         PCWSTR(resume_label.as_ptr()),
     );
-    let viewer_label = wide("Rules and activity…");
+    // P8-M3 (ADR 0061): pause or resume one agent; the others keep working.
+    let agents = crate::agents::menu_items();
+    let agent_labels: Vec<Vec<u16>> = agents.iter().map(|(_, l)| wide(&perceive::clip(l, 110))).collect();
+    let agents_title = wide(if agents.is_empty() { "Agents (none connected)" } else { "Agents" });
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+    if agents.is_empty() {
+        let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(agents_title.as_ptr()));
+    } else if let Ok(sub) = CreatePopupMenu() {
+        for (i, (client, _)) in agents.iter().enumerate() {
+            let flags = if crate::agents::is_paused(client) { MF_STRING | MF_CHECKED } else { MF_STRING };
+            let _ = AppendMenuW(sub, flags, ID_AGENT_BASE + i, PCWSTR(agent_labels[i].as_ptr()));
+        }
+        let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, PCWSTR(agents_title.as_ptr()));
+    }
+    let viewer_label = wide("Rules and activity…");
     let _ = AppendMenuW(menu, MF_STRING, ID_VIEWER, PCWSTR(viewer_label.as_ptr()));
     let quit_label = wide("Quit XtraOS core");
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -1538,6 +1564,12 @@ unsafe fn tray_menu(h: WHWND) {
         ID_RESUME => resume(),
         ID_QUIT => quit(h),
         ID_VIEWER => open_viewer(),
+        c if c >= ID_AGENT_BASE && c < ID_AGENT_BASE + agents.len() => {
+            let client = &agents[c - ID_AGENT_BASE].0;
+            let on = !crate::agents::is_paused(client);
+            crate::agents::set_paused(client, on);
+            eprintln!("[xtraos-core] agent {client} {} by the user", if on { "paused" } else { "resumed" });
+        }
         _ => {}
     }
 }

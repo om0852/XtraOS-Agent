@@ -55,9 +55,11 @@ const lent = (r: any) => (typeof r.borrowed_ms === 'number' ? ` · window borrow
 
 type Status = {
   version: string; session: string; client: string; state: string; uptime_ms: number; kill_hotkey: string | null;
+  profile?: string;
   admin_helper?: { running: boolean; pid?: number };
   dialog?: { window: string; title: string; blocking: boolean } | null;
   health?: { cpu_pct: number | null; ram_pct: number | null; warnings: string[] };
+  locks?: { window: string; title: string; client: string; session: string; idle_s: number }[];
 };
 
 /** Forwards to the core and renders a compact one-line result (docs/06: <= 30 tokens). */
@@ -70,7 +72,7 @@ export const TOOLS: ToolDef[] = [
     description:
       'Shows whether the XtraOS core is running and paired: version, session, state (running / stopped by the ' +
       'user), kill-switch hotkey, `dialog` (front window\'s message box). Call this first; if it fails, ask the user to start the XtraOS core. ' +
-      'If stopped: stop entirely — only the user can resume, from the XtraOS tray icon.',
+      'If stopped or paused: stop entirely; only the user can resume, from the XtraOS tray icon.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run(core) {
       const s = (await core.call('status')) as Status;
@@ -79,7 +81,13 @@ export const TOOLS: ToolDef[] = [
         (s.admin_helper?.running ? ` · admin helper on (pid ${s.admin_helper.pid})` : '') +
         (s.health && s.health.ram_pct != null ? ` · CPU ${Math.round(s.health.cpu_pct ?? 0)} % RAM ${Math.round(s.health.ram_pct)} %` : '') +
         (s.dialog ? `\n!! dialog ${s.dialog.window} "${s.dialog.title}"${s.dialog.blocking ? ' (blocking)' : ''}: observe it` : '') +
-        (s.health?.warnings.length ? `\n⚠ ${s.health.warnings.join('; ')}` : '');
+        (s.health?.warnings.length ? `\n⚠ ${s.health.warnings.join('; ')}` : '') +
+        // P8-M1: windows other agents are working in (acting there gives WINDOW_BUSY).
+        (s.locks?.filter((l) => l.session !== s.session).length
+          ? `\nin use by other agents: ${s.locks.filter((l) => l.session !== s.session).map((l) => `${l.window} "${l.title}" (${l.client}, ${l.idle_s}s idle)`).join('; ')}`
+          : '') +
+        // P8-M2 (ADR 0060): what this agent may do — shown only when limited.
+        (s.profile && s.profile !== 'full' ? `\nyour access on this PC: ${s.profile}` : '');
     },
   },
   {
@@ -822,6 +830,12 @@ export function profileFrom(value: string | undefined): { profile: Profile; warn
   if (v === '' || v === 'full') return { profile: 'full' };
   if (v === 'core') return { profile: 'core' };
   return { profile: 'full', warning: `unknown XTRAOS_TOOLS '${value}' (use core or full); listing all tools` };
+}
+
+/** P8-M2 (ADR 0060): the pairing name for an MCP client (`mcp:claude-code`); `xtraos-mcp` if unnamed. */
+export function mcpClientName(name: string | undefined): string {
+  const n = (name ?? '').trim().toLowerCase().replace(/[^a-z0-9._ -]/g, '').replace(/\s+/g, '-').slice(0, 56);
+  return n ? `mcp:${n}` : 'xtraos-mcp';
 }
 
 export const listedTools = (profile: Profile): ToolDef[] =>

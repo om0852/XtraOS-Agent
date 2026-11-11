@@ -76,10 +76,10 @@ process. The exact config of each client must be verified in Phase 5, not assume
 | P5-M3 | **`xtraos setup`**: detects installed clients and writes their MCP entry after showing the change; `xtraos doctor` checks core, pipe, pairing and each client | Verified on Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Cline, Codex CLI, Gemini CLI. **Built (ADR 0045); live check per client open.** |
 | P5-M4 | **Publish SDKs**: `@xtraos/sdk` on npm, `xtraos` on PyPI | Install from the registry on a clean machine; SDK tests pass. |
 | P5-M5 | **WSL path**: verify `xtraos-mcp.cmd` and `xtraos-core.exe call` through WSL interop; document the config for Hermes and OpenClaw | Hermes and OpenClaw in WSL2 each complete flow F2 (recorded). |
-| P5-M6 | **Skill package**: `skills/xtraos/SKILL.md` teaching the CLI bridge, for OpenClaw, Hermes and Claude Code skills | Installed from Git in OpenClaw; one task done with no MCP. |
+| P5-M6 | **Skill package**: `skills/xtraos/SKILL.md` teaching the CLI bridge, for OpenClaw, Hermes and Claude Code skills | Installed from Git in OpenClaw; one task done with no MCP. **Built (2026-11-11): every command in it re-run against a core; the WSL line is marked unverified. Open: the OpenClaw install run.** |
 | P5-M7 | **Lean tool surface**: server `instructions` (how to work: observe → ref → act); tool profiles `core` (15 tools) / `full`; shorter descriptions | `core` profile `tools/list` ≤ 3,500 tokens (measured ~3,400 with 15 tools, down from ~8,500; ADR 0044); routine task still ≤ 3 calls. **Built.** |
 | P5-M8 | **Local HTTP MCP endpoint** (opt-in, loopback only, pairing token). **Needs an ADR first**: CLAUDE.md §4 says local IPC only; loopback with a token is local, but the owner must decide | Security test: no token → refused; non-loopback bind impossible. |
-| P5-M9 | **Integration guide** per client + a compatibility matrix in the README (verified rows only) | Each row links to a recorded run. |
+| P5-M9 | **Integration guide** per client + a compatibility matrix in the README (verified rows only) | Each row links to a recorded run. **Built: `docs/10-integration-guide.md` with the matrix; verified rows: Claude Code (MCP, live) and the command line. Other clients: config tested, live run pending.** |
 
 ### Phase 6 — Reliable daily driver · ~4 weeks
 
@@ -101,12 +101,12 @@ Skills people ask for daily, each one call, each policy-checked:
 
 | ID | Work |
 |---|---|
-| P7-M1 | **Office pack**: Excel (read / write a range, save as), Word (insert, export PDF), Outlook (draft only; sending asks), PowerPoint |
-| P7-M2 | **Desktop housekeeping**: sort Downloads by rule, bulk rename, find duplicates, tidy desktop, screenshot to file |
-| P7-M3 | **Developer pack**: drive the user's own app for UI checks (`assert` text / element / frame change), read VS Code and terminal output, emulator and installer flows, "reproduce this bug" recording **Slice 1 built (ADR 0052): `run_skill dev.check` (PASS/FAIL per expectation, screenshot on failure); terminal reading verified except the VS Code integrated terminal. Slice 2 built (ADR 0053): `record_session report:true` writes a bug report with failed steps, screenshots and notes. Open: installer/emulator flows.** |
-| P7-M4 | **Routines**: run a skill on a schedule or trigger (Task Scheduler), with a daily summary; changes ask first |
-| P7-M5 | **Skill sharing**: export / import a recorded skill as one file with a review screen (first step of the skill registry) |
-| P7-M6 | **Task checkpoints**: long tasks save progress so another agent or session can resume |
+| P7-M1 | **Office pack**: Excel (read / write a range, save as), Word (insert, export PDF), Outlook (draft only; sending asks), PowerPoint **Slice 1 built (ADR 0055): `office.excel_read`, `office.excel_write` (save_as, new workbook), `office.export_pdf` (Word/Excel/PowerPoint), private hidden instances, macros off. Slice 2 (ADR 0056): `office.word_read`, `office.word_append`. Slice 3 (ADR 0062): `office.ppt_read` (titles, text, notes), `office.ppt_add_slide` (title + bullets, `at`, new deck, save_as); verified live. Open: Outlook drafts (no mail profile on the owner's PC to verify).** |
+| P7-M2 | **Desktop housekeeping**: sort Downloads by rule, bulk rename, find duplicates, tidy desktop, screenshot to file **Built (ADR 0054): `files.duplicates`, `files.largest`, `files.organize` (type/month, preview then approved apply), `files.bulk_rename`; screenshot to file already exists (CLI `--out`).** |
+| P7-M3 | **Developer pack**: drive the user's own app for UI checks (`assert` text / element / frame change), read VS Code and terminal output, emulator and installer flows, "reproduce this bug" recording **Slice 1 built (ADR 0052): `run_skill dev.check` (PASS/FAIL per expectation, screenshot on failure); terminal reading verified except the VS Code integrated terminal. Slice 2 built (ADR 0053): `record_session report:true` writes a bug report with failed steps, screenshots and notes. Not built, by decision (2026-11-11): a dedicated installer skill would accept license terms for the user (needs the user each time; `observe`/`click`/`dev.check` already drive a wizard with the user approving); emulator flows need an Android SDK, not on this PC.** |
+| P7-M4 | **Routines**: run a skill on a schedule or trigger (Task Scheduler), with a daily summary; changes ask first **Built (ADR 0063) inside the core instead of Task Scheduler (nothing registered with Windows): `routine.add` (always a dialog) / `list` / `run` / `remove` / `summary`; every N minutes or daily at HH:MM, a missed run once; each run is agent `routine:<name>` through the normal rules; a file edited outside XtraOS waits for the user; `p7m4_e2e` passes. Triggers other than time are open.** |
+| P7-M5 | **Skill sharing**: export / import a recorded skill as one file with a review screen (first step of the skill registry) **Built (ADR 0058): `skill.export` (typed text left out by default), `skill.import` with a step-by-step review the user must accept; unit-tested; the dialogs are the standard confirmation.** |
+| P7-M6 | **Task checkpoints**: long tasks save progress so another agent or session can resume **Built (ADR 0057): `task.save / load / list / done` in XtraOS's data folder; credentials refused; verified across two client sessions.** |
 
 Exit: 10 recorded everyday flows, each ≤ 3 calls and ≤ 2,000 result tokens.
 
@@ -114,9 +114,9 @@ Exit: 10 recorded everyday flows, each ≤ 3 calls and ≤ 2,000 result tokens.
 
 | ID | Work |
 |---|---|
-| P8-M1 | **Several clients at once**: sessions with per-window locks and a fair queue; `status` shows who holds what |
-| P8-M2 | **Per-client permissions**: profiles such as read-only, app allowlist, "no real input"; chosen by the user when a client first pairs |
-| P8-M3 | **Activity dashboard**: live view of what each agent does, with pause per agent |
+| P8-M1 | **Several clients at once**: sessions with per-window locks and a fair queue; `status` shows who holds what **Built (ADR 0059): window leases (20 s after the last action, released on disconnect), first-come queue ≤ 10 s then `WINDOW_BUSY`, reading never blocked, `status.locks`; `p8m1_e2e` passes with two agents.** |
+| P8-M2 | **Per-client permissions**: profiles such as read-only, app allowlist, "no real input"; chosen by the user when a client first pairs **Built (ADR 0060): MCP clients pair as `mcp:<client name>`; `policy.json` `clients` {name: full / background_only / read_only / blocked, optional `apps`} with `*` fallback; `new_clients` full (default) / read_only / ask (dialog, choice kept in `clients.json`); profile changes need the user's approval like other rules; `status.profile`; `p8m2_e2e` passes.** |
+| P8-M3 | **Activity dashboard**: live view of what each agent does, with pause per agent **Built (ADR 0061): `status.agents` (method names only, ended sessions kept 10 min); tray → Agents submenu pauses/resumes one agent (by client name; its running call stops at the next safety check, `STOPPED`; `status.state: paused`); the "Rules and activity" window shows "Agents now", live every 3 s; `p8m3_e2e` passes. The tray submenu itself is not exercised by a test (it needs a real click).** |
 | P8-M4 | **Team policies** and signed policy files (needs the owner's org model) |
 
 ### Phase 9 — Platforms

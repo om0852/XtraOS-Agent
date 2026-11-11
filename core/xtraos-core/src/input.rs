@@ -256,9 +256,30 @@ pub fn init_dpi() {
     });
 }
 
+thread_local! {
+    /// P8-M2 (ADR 0060): set for a `background_only` client's action thread.
+    static NO_REAL_INPUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The authorisation step says whether this action thread may send real input.
+pub fn set_background_only(on: bool) {
+    NO_REAL_INPUT.with(|c| c.set(on));
+}
+
+/// Refuses real mouse/keyboard/touch/pen input and focus borrowing for a background-only client.
+pub fn real_input_allowed() -> Result<(), ActError> {
+    if NO_REAL_INPUT.with(|c| c.get()) {
+        return Err(crate::safety::blocked(
+            "this agent is allowed to act in the background only (no real mouse, keyboard, touch or pen input, no focus change); this step needs real input",
+        ));
+    }
+    Ok(())
+}
+
 /// Every injected event goes through here: nothing is sent after the kill switch (M5).
 fn send(inputs: &[INPUT]) -> Result<(), ActError> {
     crate::safety::check()?;
+    real_input_allowed()?;
     send_always(inputs)
 }
 
@@ -709,6 +730,7 @@ pub fn borrow_begin(p: &Value, window: HWND, estimate_ms: u64) -> Result<Option<
     if crate::winmgr::foreground_root() == window || !borrow_wanted(p)? {
         return Ok(None);
     }
+    real_input_allowed()?;
     let key = window as usize;
     let recent = BORROW_OK
         .lock()

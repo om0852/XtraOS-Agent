@@ -31,6 +31,8 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, ActError> {
         return crate::audit::run(p);
     }
     if crate::helper::owns_refs(p) {
+        // P8-M2: the admin helper is another process; a background-only client may not use it.
+        crate::input::real_input_allowed()?;
         return crate::helper::forward(method, p);
     }
     match dispatch_local(method, p) {
@@ -39,6 +41,7 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, ActError> {
                 && crate::helper::ROUTABLE.contains(&method)
                 && crate::helper::connected() =>
         {
+            crate::input::real_input_allowed()?;
             crate::helper::forward(method, p)
         }
         r => r,
@@ -77,7 +80,11 @@ pub fn example(method: &str) -> Option<&'static str> {
 
 /// Runs one OS method in this process (the core, or inside the admin helper).
 pub fn dispatch_local(method: &str, p: &Value) -> Result<Value, ActError> {
-    run_local(method, p).map_err(|mut e| {
+    // P8-M1 (ADR 0059): another agent session working in the same window → wait, then WINDOW_BUSY.
+    let leased = crate::locks::acquire(method, p)?;
+    let r = run_local(method, p);
+    crate::locks::done(&leased);
+    r.map_err(|mut e| {
         // Only the generic pointer is replaced; specific hints stay.
         if e.code == "INVALID_ARGS" && e.hint.starts_with("Check the tool schema") {
             if let Some(x) = example(method) {

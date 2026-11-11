@@ -215,6 +215,7 @@ fn pinfo(
 }
 
 fn inject(dev: &Device, frame: &[POINTER_TYPE_INFO]) -> Result<(), ActError> {
+    input::real_input_allowed()?;
     input::mark_injected();
     unsafe { InjectSyntheticPointerInput(dev.0, frame) }.map_err(|e| ActError {
         code: "INTERNAL",

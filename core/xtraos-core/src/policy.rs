@@ -547,6 +547,76 @@ pub struct Policy {
     /// Source file (if any) and a short hash of its content, for the action log.
     pub source: Option<(PathBuf, String)>,
     pub warnings: Vec<String>,
+    /// P8-M2 (ADR 0060): per-client profiles (lower-case client name or "*").
+    pub clients: HashMap<String, ClientRule>,
+    /// What an unknown client gets: Full (default), ReadOnly, or Ask the user once.
+    pub new_clients: NewClients,
+}
+
+/// What one agent client may do (ADR 0060).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Profile {
+    Full,
+    BackgroundOnly,
+    ReadOnly,
+    Blocked,
+}
+
+impl Profile {
+    pub fn parse(s: &str) -> Option<Profile> {
+        match s.to_ascii_lowercase().replace('-', "_").as_str() {
+            "full" => Some(Profile::Full),
+            "background_only" | "background" => Some(Profile::BackgroundOnly),
+            "read_only" | "readonly" => Some(Profile::ReadOnly),
+            "blocked" | "block" => Some(Profile::Blocked),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Profile::Full => "full",
+            Profile::BackgroundOnly => "background_only",
+            Profile::ReadOnly => "read_only",
+            Profile::Blocked => "blocked",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClientRule {
+    pub profile: Profile,
+    /// Acting only in windows of these processes (lower case), when set.
+    pub apps: Option<Vec<String>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewClients {
+    Full,
+    ReadOnly,
+    Ask,
+}
+
+/// Methods a read-only client may call (pure). `skill_observe`: for run_skill, whether the
+/// skill's own policy class is observe.
+pub fn is_read_method(method: &str, p: &Value, skill_observe: bool) -> bool {
+    let op = p.get("op").and_then(Value::as_str).unwrap_or("");
+    match method {
+        "observe" | "find" | "read_text" | "screenshot" | "ocr" | "frame_diff" | "wait_for"
+        | "list_windows" | "list_skills" | "ask_human" | "wait_for_human" | "status" => true,
+        "app_map" => matches!(op, "list" | "get"),
+        "system" => match op {
+            "health" | "battery" => true,
+            "brightness" => p.get("value").is_none_or(Value::is_null),
+            "wifi" | "bluetooth" => p.get("state").is_none_or(Value::is_null),
+            _ => false,
+        },
+        "volume" => op == "get",
+        "browser" => p.get("action").and_then(Value::as_str).is_some_and(crate::browser::is_observe),
+        "run_skill" => skill_observe,
+        "batch" => true, // every step is checked on its own
+        _ => false,
+    }
 }
 
 impl Default for Policy {
@@ -565,6 +635,8 @@ impl Default for Policy {
             task_idle_minutes: 10,
             source: None,
             warnings: Vec::new(),
+            clients: HashMap::new(),
+            new_clients: NewClients::Full,
         }
     }
 }
@@ -618,8 +690,50 @@ impl Policy {
         if let Some(r) = v.get("task_idle_minutes").and_then(Value::as_u64) {
             p.task_idle_minutes = r.clamp(1, 1440) as u32;
         }
+        // P8-M2 (ADR 0060)
+        if let Some(cs) = v.get("clients").and_then(Value::as_object) {
+            for (k, rule) in cs {
+                let parsed = match rule {
+                    Value::String(s) => Profile::parse(s).map(|profile| ClientRule { profile, apps: None }),
+                    Value::Object(o) => o
+                        .get("profile")
+                        .and_then(Value::as_str)
+                        .and_then(Profile::parse)
+                        .map(|profile| ClientRule {
+                            profile,
+                            apps: o.get("apps").and_then(Value::as_array).map(|a| {
+                                a.iter().filter_map(|x| x.as_str().map(|s| s.to_lowercase())).collect()
+                            }),
+                        }),
+                    _ => None,
+                };
+                match parsed {
+                    Some(r) => {
+                        p.clients.insert(k.to_lowercase(), r);
+                    }
+                    None => p.warnings.push(format!("clients.{k}: ignored (profile: full, background_only, read_only, blocked)")),
+                }
+            }
+        }
+        match v.get("new_clients").and_then(Value::as_str) {
+            None => {}
+            Some(s) => match s.to_ascii_lowercase().replace('-', "_").as_str() {
+                "full" => p.new_clients = NewClients::Full,
+                "read_only" => p.new_clients = NewClients::ReadOnly,
+                "ask" => p.new_clients = NewClients::Ask,
+                o => p.warnings.push(format!("new_clients: '{o}' ignored (full, read_only, ask)")),
+            },
+        }
         p.enforce_hard_rules();
         p
+    }
+
+    /// The rule for a client from this policy: its own entry, else `*` (pure).
+    pub fn client_rule(&self, client: &str) -> Option<ClientRule> {
+        self.clients
+            .get(&client.to_lowercase())
+            .or_else(|| self.clients.get("*"))
+            .cloned()
     }
 
     /// Rules the user cannot loosen (ADR 0017, CLAUDE.md §4).
@@ -839,6 +953,24 @@ pub fn summary(old: &Policy, new: &Policy) -> Vec<String> {
             "rate_per_minute: {} → {}",
             old.rate_per_minute, new.rate_per_minute
         ));
+    }
+    // P8-M2: a client getting more (or less) access is a rule change the user must approve.
+    let rule = |r: Option<&ClientRule>| match r {
+        None => "(default)".to_string(),
+        Some(ClientRule { profile, apps: None }) => profile.name().to_string(),
+        Some(ClientRule { profile, apps: Some(a) }) => format!("{} in {}", profile.name(), a.join(", ")),
+    };
+    let mut cs: Vec<&String> = old.clients.keys().chain(new.clients.keys()).collect();
+    cs.sort();
+    cs.dedup();
+    for c in cs {
+        let (x, y) = (old.clients.get(c), new.clients.get(c));
+        if x != y {
+            out.push(format!("client {c}: {} → {}", rule(x), rule(y)));
+        }
+    }
+    if old.new_clients != new.new_clients {
+        out.push(format!("new_clients: {:?} → {:?}", old.new_clients, new.new_clients).to_lowercase());
     }
     out
 }

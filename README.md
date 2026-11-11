@@ -73,7 +73,10 @@ $x = "$env:LOCALAPPDATA\Programs\XtraOS\bin\xtraos-core.exe"
 '{"window":"desktop","bounds":true}' | & $x call observe -
 '{"name":"files.find","args":{"path":"C:/Users/me","pattern":"*resume*"}}' | & $x call run_skill -
 ```
-(`-` reads the JSON from stdin, which avoids shell quoting problems.)
+(`-` reads the JSON from stdin, which avoids shell quoting problems.) Skill-based agents
+(OpenClaw, Hermes, Claude Code skills) can install [`skills/xtraos/SKILL.md`](skills/xtraos/SKILL.md),
+which teaches this bridge. Which AI tools are verified, and how to connect each:
+[docs/10-integration-guide.md](docs/10-integration-guide.md).
 
 Uninstall: `%LOCALAPPDATA%\Programs\XtraOS\uninstall.ps1` (`-Purge` also removes its data).
 
@@ -84,7 +87,9 @@ Uninstall: `%LOCALAPPDATA%\Programs\XtraOS\uninstall.ps1` (`-Purge` also removes
 | See | `observe` (element tree with refs, diffs, positions), `find` (incl. virtualised list rows), `read_text`, `screenshot`, `ocr`, `frame_diff`, `wait_for` |
 | Act | `click`, `type`, `press_keys`, `scroll`, `drag`, `mouse`, `set_value`, `clipboard`, `touch`, `pen`, `batch` (up to 50 steps in one call) |
 | Windows and apps | `list_windows`, `focus_window`, `launch_app`, `close_window`, `window_bounds`, `cleanup`, `app_map` |
-| Files and routines | skills: `files.list/find/open/mkdir/copy/move/rename/delete`, macro skills, `record_session` → replayable skill |
+| Files and routines | skills: `files.list/find/open/mkdir/copy/move/rename/delete`, `files.duplicates/largest/organize/bulk_rename`, macro skills, `record_session` → replayable skill, `routine.*` (a skill on a schedule; you approve each routine), `task.*` checkpoints |
+| Office | `office.excel_read/excel_write`, `office.word_read/word_append`, `office.ppt_read/ppt_add_slide`, `office.export_pdf` (hidden Office, macros off) |
+| Several agents | per-window locks, per-agent permissions (`policy.json` `clients`), tray → Agents to pause one agent, live "Agents now" view |
 | Human in the loop | `ask_human`, `wait_for_human`, approval dialogs, kill switch, `status` |
 | More | `sandbox` (a disposable Windows Sandbox desktop), `elevated_helper` (admin apps via UAC), `browser` (via the XtraDevPilot extension), `system`, `volume`, `audit_export` |
 
@@ -170,6 +175,8 @@ Gates: `tests/phase0/run-tests.ps1`, `tests/phase1/m1-gate.ps1` … `m6-gate.ps1
 | [docs/06-performance-budget.md](docs/06-performance-budget.md) | Token and latency budgets |
 | [docs/07-development-plan.md](docs/07-development-plan.md) | Phases, milestones, exit criteria |
 | [docs/08-test-plan.md](docs/08-test-plan.md) | Test levels, test cases per phase, phase gates |
+| [docs/09-next-phases-plan.md](docs/09-next-phases-plan.md) | Phases 5–8: connect anywhere, reliability, everyday packs, several agents |
+| [docs/10-integration-guide.md](docs/10-integration-guide.md) | Connect each AI tool; which ones are verified |
 | [CLAUDE.md](CLAUDE.md) | Development rules, boundaries, definition of done |
 
 ## Contributing

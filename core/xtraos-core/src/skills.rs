@@ -7,6 +7,7 @@
 //! Protected paths are refused before anything happens.
 //!
 //! Docs: IFileOperation https://learn.microsoft.com/windows/win32/api/shobjidl_core/nn-shobjidl_core-ifileoperation
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::{json, Map, Value};
@@ -89,6 +90,78 @@ pub const BUILTINS: &[Builtin] = &[
         class: Class::FileChange,
     },
     Builtin {
+        name: "office.excel_read",
+        args: "path, range, sheet?",
+        about: "read cells from an Excel file (a hidden Excel, macros off; ≤ 2,000 cells)",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "office.excel_write",
+        args: "path, range (top-left cell), values[[...]], sheet?, save_as?",
+        about: "write cells into an Excel file and save (asks the user; ≤ 1,000 cells; a new path creates the workbook)",
+        class: Class::FileChange,
+    },
+    Builtin {
+        name: "office.word_read",
+        args: "path, max_chars?",
+        about: "the text of a Word document (a hidden Word, macros off)",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "office.word_append",
+        args: "path, text, save_as?",
+        about: "add paragraphs at the end of a Word document, or create it (asks the user)",
+        class: Class::FileChange,
+    },
+    Builtin {
+        name: "office.ppt_read",
+        args: "path, notes?, max_chars?",
+        about: "the slides of a PowerPoint file: titles, text, notes (a hidden PowerPoint, macros off)",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "office.ppt_add_slide",
+        args: "path, title, bullets?[], at?, save_as?",
+        about: "add a title + bullets slide to a PowerPoint file, or create it (asks the user)",
+        class: Class::FileChange,
+    },
+    Builtin {
+        name: "routine.add",
+        args: "name, skill, args?, every_minutes? (≥ 5) | daily_at? \"HH:MM\"",
+        about: "run a skill on a schedule while XtraOS runs (the user approves it in a dialog)",
+        class: Class::FileChange,
+    },
+    Builtin {
+        name: "routine.list",
+        args: "",
+        about: "the scheduled routines and their last run",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "routine.run",
+        args: "name",
+        about: "run a routine now (as itself: its own rules apply)",
+        class: Class::FileChange,
+    },
+    Builtin {
+        name: "routine.remove",
+        args: "name",
+        about: "delete a routine",
+        class: Class::FileChange,
+    },
+    Builtin {
+        name: "routine.summary",
+        args: "hours? (24)",
+        about: "what the routines did: runs, failures, last result",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "office.export_pdf",
+        args: "path, out?",
+        about: "save a Word, Excel or PowerPoint file as PDF next to it (asks the user; never overwrites)",
+        class: Class::FileChange,
+    },
+    Builtin {
         name: "files.rename",
         args: "path, new_name",
         about: "rename in place; never overwrites",
@@ -99,6 +172,66 @@ pub const BUILTINS: &[Builtin] = &[
         args: "paths[]",
         about: "to the Recycle Bin (asks the user first)",
         class: Class::Delete,
+    },
+    Builtin {
+        name: "files.duplicates",
+        args: "path, min_kb?, limit?",
+        about: "identical files (byte for byte) under a folder, biggest waste first; delete with files.delete",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "files.largest",
+        args: "path, limit?",
+        about: "the biggest files under a folder, with sizes and dates",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "files.organize",
+        args: "path, by?: type|month, apply?",
+        about: "sort the files in a folder (e.g. Downloads) into subfolders; without apply only the plan; apply asks the user",
+        class: Class::FileChange,
+    },
+    Builtin {
+        name: "files.bulk_rename",
+        args: "path, find, replace, pattern?, apply?",
+        about: "replace text in many file names; without apply only the preview; apply asks the user",
+        class: Class::FileChange,
+    },
+    Builtin {
+        name: "skill.export",
+        args: "name, out?, include_defaults?",
+        about: "save a recorded skill as one file to share (typed text left out unless include_defaults; asks the user)",
+        class: Class::FileChange,
+    },
+    Builtin {
+        name: "skill.import",
+        args: "path, name?",
+        about: "add a shared skill file: the user reviews every step and must press Import",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "task.save",
+        args: "id, state (any JSON ≤ 32 KB), note?",
+        about: "save a long task's progress so another agent or session can resume (never credentials)",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "task.load",
+        args: "id",
+        about: "the saved progress of a task",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "task.list",
+        args: "",
+        about: "saved task checkpoints, newest first (older than 30 days are removed)",
+        class: Class::Observe,
+    },
+    Builtin {
+        name: "task.done",
+        args: "id",
+        about: "remove a finished task's checkpoint",
+        class: Class::Observe,
     },
     Builtin {
         name: "dev.check",
@@ -334,9 +467,114 @@ pub fn plan(p: &Value) -> Result<Plan, ActError> {
     if let Some(b) = BUILTINS.iter().find(|b| b.name == name) {
         // Validate every path now: protected ones are refused before anything happens.
         let what = match b.name {
-            "files.list" | "files.find" | "files.open" | "files.mkdir" => {
+            "files.list" | "files.find" | "files.open" | "files.mkdir" | "files.duplicates"
+            | "files.largest" => {
                 let x = checked(str_arg(&args, "path")?)?;
                 format!("{} {}", b.name, x.display())
+            }
+            // ADR 0055: Office files go through the same protected-places check.
+            "office.excel_read" => {
+                let x = checked(str_arg(&args, "path")?)?;
+                format!("read {} from {}", str_arg(&args, "range")?, x.display())
+            }
+            "office.excel_write" => {
+                let x = checked(str_arg(&args, "path")?)?;
+                let vals = crate::office::write_values(&args)?;
+                let first: Vec<String> = vals
+                    .iter()
+                    .take(3)
+                    .map(|r| r.iter().take(6).map(|c| crate::perceive::clip(&c.to_string(), 20)).collect::<Vec<_>>().join(", "))
+                    .collect();
+                format!(
+                    "write {} row(s) at {}{} in {}{}:\n{}",
+                    vals.len(),
+                    str_arg(&args, "range")?,
+                    args.get("sheet").and_then(Value::as_str).map(|s| format!(" (sheet {s})")).unwrap_or_default(),
+                    x.display(),
+                    args.get("save_as").and_then(Value::as_str).map(|s| format!(", saved as {s}")).unwrap_or_default(),
+                    first.join("\n")
+                )
+            }
+            "skill.export" => format!(
+                "export the recorded skill '{}' to a file{}",
+                str_arg(&args, "name")?,
+                if args.get("include_defaults").and_then(Value::as_bool).unwrap_or(false) { " (with the text it typed)" } else { "" }
+            ),
+            "skill.import" => format!("import a skill from {} (you review it first)", checked(str_arg(&args, "path")?)?.display()),
+            "office.word_read" => {
+                let x = checked(str_arg(&args, "path")?)?;
+                format!("read the text of {}", x.display())
+            }
+            "office.ppt_read" => {
+                let x = checked(str_arg(&args, "path")?)?;
+                format!("read the slides of {}", x.display())
+            }
+            // ADR 0063: adding shows its own dialog with the schedule; the skill it schedules
+            // is checked (paths, credentials) before that dialog.
+            "routine.add" => {
+                let r = crate::routines::from_args(&args, 0, "")?;
+                plan(&json!({"name": r.skill, "args": r.args}))?;
+                format!("add routine '{}': {} {}", r.name, r.skill, r.schedule.describe())
+            }
+            "routine.run" => format!("run routine '{}' now", str_arg(&args, "name")?),
+            "routine.remove" => format!("remove routine '{}'", str_arg(&args, "name")?),
+            "routine.list" | "routine.summary" => b.about.to_string(),
+            "office.ppt_add_slide" => {
+                let x = checked(str_arg(&args, "path")?)?;
+                let (title, bullets) = crate::office::slide_args(&args)?;
+                format!(
+                    "add a slide \"{}\" with {} bullet(s) to {}{}",
+                    crate::perceive::clip(&title, 80),
+                    bullets.len(),
+                    x.display(),
+                    args.get("save_as").and_then(Value::as_str).map(|s| format!(", saved as {s}")).unwrap_or_default()
+                )
+            }
+            "office.word_append" => {
+                let x = checked(str_arg(&args, "path")?)?;
+                let t = args.get("text").and_then(Value::as_str).unwrap_or("");
+                format!(
+                    "add {} character(s) to the end of {}{}:\n\"{}\"",
+                    t.chars().count(),
+                    x.display(),
+                    args.get("save_as").and_then(Value::as_str).map(|s| format!(", saved as {s}")).unwrap_or_default(),
+                    crate::perceive::clip(t, 160)
+                )
+            }
+            "office.export_pdf" => {
+                let x = checked(str_arg(&args, "path")?)?;
+                let out = crate::office::pdf_target(&x, args.get("out").and_then(Value::as_str));
+                format!("save {} as PDF {}", x.display(), checked(&out.to_string_lossy())?.display())
+            }
+            // ADR 0054: the plan itself is the description the user approves.
+            "files.organize" => {
+                let x = checked(str_arg(&args, "path")?)?;
+                let (moves, _) = organize_plan(&x, organize_by(&args)?)?;
+                let folders: std::collections::BTreeSet<&str> =
+                    moves.iter().map(|(_, f)| f.as_str()).collect();
+                format!(
+                    "move {} file(s) in {} into {} folder(s): {}",
+                    moves.len(),
+                    x.display(),
+                    folders.len(),
+                    folders.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            }
+            "files.bulk_rename" => {
+                let x = checked(str_arg(&args, "path")?)?;
+                let plan = bulk_rename_plan(&x, &args)?;
+                let shown: Vec<String> = plan
+                    .iter()
+                    .take(8)
+                    .map(|(a, b)| format!("{a} → {b}"))
+                    .collect();
+                format!(
+                    "rename {} file(s) in {}:\n{}{}",
+                    plan.len(),
+                    x.display(),
+                    shown.join("\n"),
+                    if plan.len() > 8 { "\n…" } else { "" }
+                )
             }
             "files.rename" => {
                 let x = checked(str_arg(&args, "path")?)?;
@@ -399,8 +637,11 @@ pub fn plan(p: &Value) -> Result<Plan, ActError> {
             }
             _ => b.name.to_string(),
         };
+        let apply = args.get("apply").and_then(Value::as_bool).unwrap_or(false);
         let class = if b.name == "whatsapp.send" && args.get("file").is_some_and(|f| !f.is_null()) {
             Class::FileSend
+        } else if matches!(b.name, "files.organize" | "files.bulk_rename") && !apply {
+            Class::Observe // a preview changes nothing
         } else {
             b.class
         };
@@ -450,6 +691,21 @@ pub fn run(p: &Value, log: &mut dyn FnMut(crate::exec::StepLog)) -> Result<Value
         "files.delete" => delete(&args),
         "whatsapp.send" => whatsapp_send(&args),
         "dev.check" => dev_check(&args),
+        n @ ("task.save" | "task.load" | "task.list" | "task.done") => crate::tasks::run(n, &args),
+        "skill.export" => crate::sharing::export(&args),
+        "skill.import" => crate::sharing::import(&args),
+        "files.duplicates" => files_duplicates(&args),
+        "files.largest" => files_largest(&args),
+        "files.organize" => files_organize(&args),
+        "files.bulk_rename" => files_bulk_rename(&args),
+        "office.excel_read" => crate::office::excel_read(&args),
+        "office.excel_write" => crate::office::excel_write(&args),
+        "office.export_pdf" => crate::office::export_pdf(&args),
+        "office.word_read" => crate::office::word_read(&args),
+        "office.word_append" => crate::office::word_append(&args),
+        "office.ppt_read" => crate::office::ppt_read(&args),
+        "office.ppt_add_slide" => crate::office::ppt_add_slide(&args),
+        n if n.starts_with("routine.") => crate::routines::run(n, &args),
         n => Err(bad(format!("unknown skill '{n}'"))),
     }
 }
@@ -1107,6 +1363,429 @@ fn delete(a: &Value) -> Result<Value, ActError> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Housekeeping (P7-M2, ADR 0054)
+
+/// Every file under `root` (breadth-first, like files.find: no hidden folders, AppData,
+/// node_modules, links or protected places): (path, size, modified ms), and whether the time
+/// budget cut the walk short.
+fn walk_files(root: &Path, budget: std::time::Duration) -> (Vec<(PathBuf, u64, u64)>, bool) {
+    use std::os::windows::fs::MetadataExt;
+    const HIDDEN: u32 = 0x2;
+    const REPARSE: u32 = 0x400;
+    let own = own_dirs();
+    let t0 = std::time::Instant::now();
+    let mut queue = std::collections::VecDeque::from([(root.to_path_buf(), 0)]);
+    let (mut out, mut cut) = (Vec::new(), false);
+    while let Some((dir, depth)) = queue.pop_front() {
+        if t0.elapsed() > budget {
+            cut = true;
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let Ok(md) = e.metadata() else { continue };
+            let attrs = md.file_attributes();
+            let path = e.path();
+            if md.is_dir() {
+                let name = e.file_name().to_string_lossy().to_lowercase();
+                if depth < 12
+                    && attrs & (HIDDEN | REPARSE) == 0
+                    && !name.starts_with('.')
+                    && name != "node_modules"
+                    && name != "appdata"
+                    && protected_reason(&path, &own).is_none()
+                {
+                    queue.push_back((path, depth + 1));
+                }
+            } else if attrs & REPARSE == 0 {
+                out.push((path, md.len(), modified_ms(&md)));
+            }
+        }
+    }
+    (out, cut)
+}
+
+fn files_largest(a: &Value) -> Result<Value, ActError> {
+    let root = checked(str_arg(a, "path")?)?;
+    if !root.is_dir() {
+        return Err(bad(format!("{} is not a folder", root.display())));
+    }
+    let limit = a.get("limit").and_then(Value::as_u64).unwrap_or(20).clamp(1, 100) as usize;
+    let (mut files, cut) = walk_files(&root, std::time::Duration::from_secs(15));
+    let total: u64 = files.iter().map(|f| f.1).sum();
+    let count = files.len();
+    files.sort_by_key(|f| std::cmp::Reverse(f.1));
+    let lines: Vec<String> = files
+        .iter()
+        .take(limit)
+        .map(|(p, s, m)| format!("{:>9}  {}  {}", size(*s), modified_text(*m), p.display()))
+        .collect();
+    let mut foot = format!("-- {count} files, {} in total", size(total));
+    if cut {
+        foot.push_str("; time budget reached (only part of the folder was scanned)");
+    }
+    Ok(json!({
+        "text": format!("largest files in {}\n{}\n{foot}", root.display(), lines.join("\n")),
+        "files": count, "bytes": total, "complete": !cut,
+    }))
+}
+
+/// Byte-for-byte equality of two files, streamed.
+fn same_content(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let (Ok(mut x), Ok(mut y)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    let (mut bx, mut by) = (vec![0u8; 1 << 20], vec![0u8; 1 << 20]);
+    loop {
+        let (Ok(n), Ok(m)) = (read_full(&mut x, &mut bx), read_full(&mut y, &mut by)) else {
+            return false;
+        };
+        if n != m || bx[..n] != by[..m] {
+            return false;
+        }
+        if n == 0 {
+            return true;
+        }
+    }
+    fn read_full(f: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut got = 0;
+        while got < buf.len() {
+            match f.read(&mut buf[got..])? {
+                0 => break,
+                n => got += n,
+            }
+        }
+        Ok(got)
+    }
+}
+
+fn head_hash(p: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(p).ok()?;
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut got = 0;
+    while got < buf.len() {
+        match f.read(&mut buf[got..]).ok()? {
+            0 => break,
+            n => got += n,
+        }
+    }
+    Some(crate::actionlog::sha256_hex(&buf[..got]))
+}
+
+/// Groups of identical files among (path, size, modified): same size → same first 64 KB →
+/// byte-for-byte equal. Each group newest first; groups with the most wasted bytes first.
+pub fn duplicate_groups(files: &[(PathBuf, u64, u64)], deadline: std::time::Instant) -> (Vec<Vec<(PathBuf, u64, u64)>>, bool) {
+    let mut by_size: HashMap<u64, Vec<&(PathBuf, u64, u64)>> = HashMap::new();
+    for f in files {
+        by_size.entry(f.1).or_default().push(f);
+    }
+    let mut groups = Vec::new();
+    let mut cut = false;
+    let mut sizes: Vec<u64> = by_size.iter().filter(|(_, v)| v.len() > 1).map(|(s, _)| *s).collect();
+    sizes.sort_unstable_by(|a, b| b.cmp(a)); // biggest first: the most space to win
+    'sizes: for s in sizes {
+        let mut by_head: HashMap<String, Vec<&(PathBuf, u64, u64)>> = HashMap::new();
+        for f in &by_size[&s] {
+            if let Some(h) = head_hash(&f.0) {
+                by_head.entry(h).or_default().push(*f);
+            }
+        }
+        for (_, mut rest) in by_head.into_iter().filter(|(_, v)| v.len() > 1) {
+            while rest.len() > 1 {
+                if std::time::Instant::now() > deadline {
+                    cut = true;
+                    break 'sizes;
+                }
+                let first = rest.remove(0);
+                let (same, other): (Vec<_>, Vec<_>) =
+                    rest.into_iter().partition(|f| same_content(&first.0, &f.0));
+                if !same.is_empty() {
+                    let mut g: Vec<(PathBuf, u64, u64)> = std::iter::once(first)
+                        .chain(same)
+                        .map(|f| (f.0.clone(), f.1, f.2))
+                        .collect();
+                    g.sort_by_key(|f| std::cmp::Reverse(f.2));
+                    groups.push(g);
+                }
+                rest = other;
+            }
+        }
+    }
+    groups.sort_by_key(|g| std::cmp::Reverse(g[0].1 * (g.len() as u64 - 1)));
+    (groups, cut)
+}
+
+fn files_duplicates(a: &Value) -> Result<Value, ActError> {
+    let root = checked(str_arg(a, "path")?)?;
+    if !root.is_dir() {
+        return Err(bad(format!("{} is not a folder", root.display())));
+    }
+    let min = a.get("min_kb").and_then(Value::as_u64).unwrap_or(100) * 1024;
+    let limit = a.get("limit").and_then(Value::as_u64).unwrap_or(20).clamp(1, 100) as usize;
+    let t0 = std::time::Instant::now();
+    let (files, walk_cut) = walk_files(&root, std::time::Duration::from_secs(10));
+    let files: Vec<_> = files.into_iter().filter(|f| f.1 >= min.max(1)).collect();
+    let (groups, cmp_cut) = duplicate_groups(&files, t0 + std::time::Duration::from_secs(20));
+    let wasted: u64 = groups.iter().map(|g| g[0].1 * (g.len() as u64 - 1)).sum();
+    let mut text = format!("identical files in {} (≥ {} each)\n", root.display(), size(min.max(1)));
+    for g in groups.iter().take(limit) {
+        text.push_str(&format!(
+            "{} copies × {} ({} wasted):\n",
+            g.len(),
+            size(g[0].1),
+            size(g[0].1 * (g.len() as u64 - 1))
+        ));
+        for (i, (p, _, m)) in g.iter().enumerate() {
+            text.push_str(&format!(
+                "  {} {}  {}\n",
+                if i == 0 { "newest" } else { "      " },
+                modified_text(*m),
+                p.display()
+            ));
+        }
+    }
+    text.push_str(&format!(
+        "-- {} group(s), {} could be freed; {} files compared",
+        groups.len(),
+        size(wasted),
+        files.len()
+    ));
+    if walk_cut || cmp_cut {
+        text.push_str("; time budget reached (scan a smaller folder for the rest)");
+    }
+    text.push_str("\nTo remove copies: files.delete (asks the user; Recycle Bin).");
+    Ok(json!({
+        "text": text,
+        "groups": groups.iter().take(limit).map(|g| g.iter().map(|f| f.0.display().to_string()).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        "wasted_bytes": wasted,
+        "complete": !(walk_cut || cmp_cut),
+    }))
+}
+
+/// The folder a file goes to when organizing by type (pure).
+pub fn type_folder(name: &str) -> &'static str {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" | "bmp" | "svg" | "tif" | "tiff" | "ico" | "avif" => "Images",
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "md" | "csv" | "odt" | "ods" | "rtf" | "epub" => "Documents",
+        "mp4" | "mkv" | "mov" | "avi" | "webm" | "wmv" | "m4v" => "Videos",
+        "mp3" | "wav" | "flac" | "m4a" | "aac" | "ogg" | "wma" | "opus" => "Audio",
+        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "tgz" | "iso" => "Archives",
+        "exe" | "msi" | "msix" | "msixbundle" | "appx" | "appxbundle" => "Installers",
+        "js" | "ts" | "py" | "rs" | "json" | "html" | "css" | "java" | "c" | "cpp" | "h" | "go" | "sql" | "sh" | "ps1" | "ipynb" | "xml" | "yaml" | "yml" => "Code",
+        _ => "Other",
+    }
+}
+
+/// Downloads still in progress, never moved (pure).
+pub fn unfinished(name: &str) -> bool {
+    let n = name.to_lowercase();
+    [".crdownload", ".part", ".partial", ".download", ".tmp"]
+        .iter()
+        .any(|e| n.ends_with(e))
+}
+
+fn organize_by(a: &Value) -> Result<&'static str, ActError> {
+    match a.get("by").and_then(Value::as_str).unwrap_or("type") {
+        "type" => Ok("type"),
+        "month" => Ok("month"),
+        o => Err(bad(format!("'by' must be type or month, not '{o}'"))),
+    }
+}
+
+/// (file → folder name) moves and (file, why) skips for the files directly in `dir`.
+fn organize_plan(dir: &Path, by: &str) -> Result<(Vec<(PathBuf, String)>, Vec<(String, String)>), ActError> {
+    if !dir.is_dir() {
+        return Err(bad(format!("{} is not a folder", dir.display())));
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let rd = std::fs::read_dir(dir).map_err(|e| bad(format!("{}: {e}", dir.display())))?;
+    let (mut moves, mut skips) = (Vec::new(), Vec::new());
+    for e in rd.flatten() {
+        let Ok(md) = e.metadata() else { continue };
+        if !md.is_file() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        let m = modified_ms(&md);
+        if unfinished(&name) {
+            skips.push((name, "download not finished".into()));
+            continue;
+        }
+        if now.saturating_sub(m) < 120_000 {
+            skips.push((name, "changed in the last 2 minutes".into()));
+            continue;
+        }
+        let folder = if by == "month" {
+            modified_text(m).get(..7).unwrap_or("Unknown").to_string()
+        } else {
+            type_folder(&name).to_string()
+        };
+        if dir.join(&folder).join(&name).exists() {
+            skips.push((name, format!("{folder}\\ already has a file with that name")));
+            continue;
+        }
+        moves.push((e.path(), folder));
+    }
+    moves.sort();
+    Ok((moves, skips))
+}
+
+fn files_organize(a: &Value) -> Result<Value, ActError> {
+    let dir = checked(str_arg(a, "path")?)?;
+    let by = organize_by(a)?;
+    let apply = a.get("apply").and_then(Value::as_bool).unwrap_or(false);
+    let (moves, skips) = organize_plan(&dir, by)?;
+    let mut per: std::collections::BTreeMap<&str, usize> = Default::default();
+    for (_, f) in &moves {
+        *per.entry(f.as_str()).or_default() += 1;
+    }
+    let mut text = format!(
+        "{} {} file(s) in {} by {by}:\n",
+        if apply { "moved" } else { "would move" },
+        moves.len(),
+        dir.display()
+    );
+    for (f, n) in &per {
+        text.push_str(&format!("  {f}\\  {n}\n"));
+    }
+    for (n, why) in skips.iter().take(20) {
+        text.push_str(&format!("  skipped {n}: {why}\n"));
+    }
+    if apply && !moves.is_empty() {
+        for f in per.keys() {
+            let d = dir.join(f);
+            checked(&d.to_string_lossy())?;
+            std::fs::create_dir_all(&d).map_err(|e| internal(format!("mkdir {}: {e}", d.display())))?;
+        }
+        let (base, list) = (dir.clone(), moves.clone());
+        shell_op(SAFE_FLAGS, move |op| unsafe {
+            for (f, folder) in &list {
+                op.MoveItem(&item(f)?, &item(&base.join(folder))?, PCWSTR::null(), None::<&IFileOperationProgressSink>)?;
+            }
+            Ok(())
+        })?;
+        text.push_str("-- done; Ctrl+Z in Explorer undoes it");
+    } else if !apply {
+        text.push_str("-- preview only: run again with apply: true to move them (the user is asked)");
+    }
+    Ok(json!({"text": text, "moved": if apply { moves.len() } else { 0 }, "planned": moves.len(), "skipped": skips.len()}))
+}
+
+/// Renames for names containing `find` (case-insensitive) → `replace` (pure). Errors on an
+/// invalid or empty new name, two files ending with one name, or a name already taken.
+pub fn rename_plan(names: &[String], find: &str, replace: &str) -> Result<Vec<(String, String)>, String> {
+    if find.is_empty() {
+        return Err("'find' must not be empty".into());
+    }
+    if replace.contains(['\\', '/', ':', '*', '?', '"', '<', '>', '|']) {
+        return Err("'replace' may not contain \\ / : * ? \" < > |".into());
+    }
+    let f = find.to_lowercase();
+    let mut out = Vec::new();
+    for n in names {
+        let low = n.to_lowercase();
+        if !low.contains(&f) {
+            continue;
+        }
+        // replace every occurrence, case-insensitively, keeping the rest of the name as is
+        let (mut new, mut rest, mut rest_low) = (String::new(), n.as_str(), low.as_str());
+        while let Some(i) = rest_low.find(&f) {
+            new.push_str(&rest[..i]);
+            new.push_str(replace);
+            rest = &rest[i + f.len()..];
+            rest_low = &rest_low[i + f.len()..];
+        }
+        new.push_str(rest);
+        let trimmed = new.trim();
+        if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+            return Err(format!("\"{n}\" would get an empty name"));
+        }
+        if new != *n {
+            out.push((n.clone(), new));
+        }
+    }
+    let lower = |s: &str| s.to_lowercase();
+    let mut seen = std::collections::HashSet::new();
+    for (_, b) in &out {
+        if !seen.insert(lower(b)) {
+            return Err(format!("two files would both be named \"{b}\""));
+        }
+    }
+    let renamed: std::collections::HashSet<String> = out.iter().map(|(a, _)| lower(a)).collect();
+    for (_, b) in &out {
+        if names.iter().any(|n| lower(n) == lower(b)) && !renamed.contains(&lower(b)) {
+            return Err(format!("\"{b}\" already exists (never overwrites)"));
+        }
+    }
+    Ok(out)
+}
+
+fn bulk_rename_plan(dir: &Path, a: &Value) -> Result<Vec<(String, String)>, ActError> {
+    if !dir.is_dir() {
+        return Err(bad(format!("{} is not a folder", dir.display())));
+    }
+    let find = a.get("find").and_then(Value::as_str).unwrap_or("");
+    let replace = a.get("replace").and_then(Value::as_str).ok_or_else(|| bad("'replace' is required (may be \"\")"))?;
+    let pat = a.get("pattern").and_then(Value::as_str).unwrap_or("*");
+    let names: Vec<String> = std::fs::read_dir(dir)
+        .map_err(|e| bad(format!("{}: {e}", dir.display())))?
+        .flatten()
+        .filter(|e| e.metadata().is_ok_and(|m| m.is_file()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| wildcard(pat, n))
+        .collect();
+    // Names of everything in the folder (subfolders too) count for "already exists".
+    let mut all: Vec<String> = std::fs::read_dir(dir)
+        .map_err(|e| bad(e.to_string()))?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    all.sort();
+    let plan = rename_plan(&names, find, replace).map_err(bad)?;
+    for (_, b) in &plan {
+        let taken = all.iter().any(|n| n.eq_ignore_ascii_case(b));
+        let freed = plan.iter().any(|(a, _)| a.eq_ignore_ascii_case(b));
+        if taken && !freed {
+            return Err(bad(format!("\"{b}\" already exists (never overwrites)")));
+        }
+    }
+    Ok(plan)
+}
+
+fn files_bulk_rename(a: &Value) -> Result<Value, ActError> {
+    let dir = checked(str_arg(a, "path")?)?;
+    let apply = a.get("apply").and_then(Value::as_bool).unwrap_or(false);
+    let plan = bulk_rename_plan(&dir, a)?;
+    let lines: Vec<String> = plan.iter().take(50).map(|(x, y)| format!("  {x} → {y}")).collect();
+    let mut text = format!(
+        "{} {} file(s) in {}:\n{}\n",
+        if apply { "renamed" } else { "would rename" },
+        plan.len(),
+        dir.display(),
+        lines.join("\n")
+    );
+    if apply && !plan.is_empty() {
+        let (base, list) = (dir.clone(), plan.clone());
+        shell_op(SAFE_FLAGS, move |op| unsafe {
+            for (x, y) in &list {
+                op.RenameItem(&item(&base.join(x))?, &HSTRING::from(y.as_str()), None::<&IFileOperationProgressSink>)?;
+            }
+            Ok(())
+        })?;
+        text.push_str("-- done; Ctrl+Z in Explorer undoes it");
+    } else if !apply {
+        text.push_str("-- preview only: run again with apply: true to rename (the user is asked)");
+    }
+    Ok(json!({"text": text, "renamed": if apply { plan.len() } else { 0 }, "planned": plan.len()}))
+}
+
+// ---------------------------------------------------------------------------------------------
 // whatsapp.send (P2-M4, ADR 0028)
 
 pub struct WaArgs {
@@ -1425,6 +2104,104 @@ mod tests {
         assert!(wildcard("rep?rt*", "report-final.pdf"));
         assert!(!wildcard("*.txt", "report.pdf"));
         assert!(wildcard("*", ""));
+    }
+
+    // P7-M2 (ADR 0054): housekeeping rules
+    #[test]
+    fn housekeeping_rules() {
+        assert_eq!(type_folder("IMG_001.JPG"), "Images");
+        assert_eq!(type_folder("report.pdf"), "Documents");
+        assert_eq!(type_folder("setup.msi"), "Installers");
+        assert_eq!(type_folder("archive.tar.gz"), "Archives");
+        assert_eq!(type_folder("README"), "Other");
+        assert!(unfinished("movie.mp4.crdownload") && unfinished("x.PART") && !unfinished("a.pdf"));
+        let n = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let p = rename_plan(&n(&["IMG_1.jpg", "img_2.JPG", "notes.txt"]), "img_", "Trip ").unwrap();
+        assert_eq!(p, vec![("IMG_1.jpg".into(), "Trip 1.jpg".into()), ("img_2.JPG".into(), "Trip 2.JPG".into())]);
+        assert!(rename_plan(&n(&["a1.txt", "b1.txt"]), "a", "b").is_err(), "a1 → b1 collides with b1");
+        assert!(rename_plan(&n(&["x.txt"]), "x.txt", "").is_err(), "empty name");
+        assert!(rename_plan(&n(&["x.txt"]), "x", "a/b").is_err(), "path characters");
+        assert!(rename_plan(&n(&["x.txt"]), "", "y").is_err());
+        assert!(rename_plan(&n(&["ab.txt", "cd.txt"]), "zz", "y").unwrap().is_empty());
+    }
+
+    // P7-M2 (ADR 0054): the skills on a real temp folder (moves and renames through the shell).
+    #[test]
+    fn housekeeping_on_a_temp_folder() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("xtraos-house-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let mk = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            let mut f = std::fs::File::create(&p).unwrap();
+            f.write_all(bytes).unwrap();
+            f.set_modified(old).unwrap();
+        };
+        let a: Vec<u8> = (0..300_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        let mut c = a.clone();
+        c[299_999] ^= 1; // same size, one byte different
+        mk("photo.jpg", &a);
+        mk("sub/photo copy.jpg", &a);
+        mk("other.jpg", &c);
+        mk("notes.txt", b"hello");
+        mk("setup.exe", &vec![1u8; 500_000]);
+        mk("movie.mp4.crdownload", b"partial");
+        let p = |extra: Value| {
+            let mut v = json!({"path": dir.display().to_string()});
+            for (k, x) in extra.as_object().unwrap() {
+                v[k] = x.clone();
+            }
+            v
+        };
+
+        let d = files_duplicates(&p(json!({}))).unwrap();
+        let groups = d["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1, "{d}");
+        assert_eq!(groups[0].as_array().unwrap().len(), 2, "photo.jpg + its copy, not other.jpg: {d}");
+        assert_eq!(d["wasted_bytes"], 300_000);
+
+        let l = files_largest(&p(json!({"limit": 2}))).unwrap();
+        assert!(l["text"].as_str().unwrap().lines().nth(1).unwrap().contains("setup.exe"), "{l}");
+
+        let pre = files_organize(&p(json!({}))).unwrap();
+        assert_eq!(pre["planned"], 4, "photo, other, notes, setup (not the download): {pre}");
+        assert_eq!(pre["moved"], 0);
+        assert!(dir.join("photo.jpg").exists(), "a preview changes nothing");
+        // The policy class: a preview is read-only; apply is a file change (the user is asked),
+        // and the approval text is the plan.
+        let pl = |apply: bool| plan(&json!({"name": "files.organize", "args": {"path": dir.display().to_string(), "apply": apply}})).unwrap();
+        assert_eq!(pl(false).class, Class::Observe);
+        let ask = pl(true);
+        assert_eq!(ask.class, Class::FileChange);
+        assert!(ask.what.contains("move 4 file(s)") && ask.what.contains("Images"), "{}", ask.what);
+        let done = files_organize(&p(json!({"apply": true}))).unwrap();
+        assert_eq!(done["moved"], 4, "{done}");
+        assert!(dir.join("Images").join("photo.jpg").exists());
+        assert!(dir.join("Images").join("other.jpg").exists());
+        assert!(dir.join("Documents").join("notes.txt").exists());
+        assert!(dir.join("Installers").join("setup.exe").exists());
+        assert!(dir.join("movie.mp4.crdownload").exists(), "unfinished download stays");
+
+        let img = dir.join("Images");
+        let rp = |extra: Value| {
+            let mut v = json!({"path": img.display().to_string()});
+            for (k, x) in extra.as_object().unwrap() {
+                v[k] = x.clone();
+            }
+            v
+        };
+        let pre = files_bulk_rename(&rp(json!({"find": "photo", "replace": "trip"}))).unwrap();
+        assert_eq!(pre["planned"], 1, "{pre}");
+        assert!(img.join("photo.jpg").exists());
+        let done = files_bulk_rename(&rp(json!({"find": "photo", "replace": "trip", "apply": true}))).unwrap();
+        assert_eq!(done["renamed"], 1, "{done}");
+        assert!(img.join("trip.jpg").exists() && !img.join("photo.jpg").exists());
+        // A rename onto an existing name is refused before anything changes.
+        assert!(files_bulk_rename(&rp(json!({"find": "other", "replace": "trip"}))).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // P7-M3 (ADR 0052): dev.check

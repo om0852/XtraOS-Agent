@@ -14,7 +14,7 @@ test('status works end to end: MCP -> pipe -> core', async () => {
     await mcp.init();
     const r = await mcp.callTool('status');
     assert.equal(r.isError, false, r.text);
-    assert.match(r.text, /^XtraOS core 0\.1\.0 · running · session s\d+ \(xtraos-mcp\) · up \d+s · stop: (Ctrl\+Alt\+Esc|tray icon)$/);
+    assert.match(r.text, /^XtraOS core 0\.1\.0 · running · session s\d+ \(mcp:xtraos-test\) · up \d+s · stop: (Ctrl\+Alt\+Esc|tray icon)$/);
   } finally {
     await mcp.close(); await stopProcess(core); fs.rmSync(env.XTRAOS_HOME, { recursive: true, force: true });
   }

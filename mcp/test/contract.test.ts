@@ -99,3 +99,13 @@ test('P5-M7: initialize returns short server instructions', async () => {
     assert.ok(text.split(/\s+/).length <= 200, `instructions are ${text.split(/\s+/).length} words (max 200)`);
   } finally { await mcp.close(); }
 });
+
+test('P8-M2: the core pairing name comes from the MCP client name', async () => {
+  const { mcpClientName } = await import('../src/tools.ts');
+  assert.equal(mcpClientName('claude-code'), 'mcp:claude-code');
+  assert.equal(mcpClientName('Codex MCP Client'), 'mcp:codex-mcp-client');
+  assert.equal(mcpClientName('we<i>rd\u0007'), 'mcp:weird');
+  assert.equal(mcpClientName(undefined), 'xtraos-mcp');
+  assert.equal(mcpClientName('  '), 'xtraos-mcp');
+  assert.ok(mcpClientName('x'.repeat(200)).length <= 60);
+});

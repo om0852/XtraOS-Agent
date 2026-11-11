@@ -56,7 +56,7 @@ export class CoreClient {
   private buf = '';
   private nextId = 1;
   private pending = new Map<number, Pending>();
-  private readonly clientName: string;
+  private clientName: string;
   private readonly getConnection: () => Connection;
   private readonly timeoutMs: number;
 
@@ -76,6 +76,13 @@ export class CoreClient {
     const w = (r as { health_warning?: unknown } | null)?.health_warning;
     if (typeof w === 'string') this.healthWarning = w;
     return r;
+  }
+
+  /** P8-M2 (ADR 0060): pair under this name from now on (re-pairs if already connected). */
+  setClientName(name: string): void {
+    if (name === this.clientName) return;
+    this.clientName = name;
+    this.close();
   }
 
   /** The last health warning the core sent during the current tool call (ADR 0050). */

@@ -108,8 +108,26 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
     let mut reader = BufReader::new(rd);
     let mut conn = Conn::default();
     let next = || shared.sessions.fetch_add(1, Ordering::Relaxed);
+    // P8-M1: when the connection ends (however), its window leases go.
+    struct ReleaseOnDrop(Option<String>);
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            if let Some(s) = &self.0 {
+                crate::locks::release_session(s);
+                crate::agents::disconnected(s);
+            }
+        }
+    }
+    let mut releaser = ReleaseOnDrop(None);
 
     loop {
+        if releaser.0.is_none() {
+            releaser.0 = conn.session.as_ref().map(|s| s.id.clone());
+            // P8-M3 (ADR 0061): the dashboard lists this agent from its pairing on.
+            if let Some(s) = conn.session.as_ref() {
+                crate::agents::connected(&s.id, &s.client);
+            }
+        }
         let mut line = String::new();
         let read = (&mut reader)
             .take(MAX_LINE as u64 + 1)
@@ -158,7 +176,10 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
                     .session
                     .as_ref()
                     .map(|s| (s.id.clone(), s.client.clone()));
+                let lock_owner = sess.clone();
                 let res = tokio::task::spawn_blocking(move || {
+                    // P8-M1: window leases belong to this session.
+                    crate::locks::set_current(lock_owner);
                     // Policy gate first (may show a confirm dialog), then the action.
                     let approval = crate::safety::authorize(&m, &params)?;
                     let r = if m == "batch" || m == "run_skill" {
@@ -235,6 +256,9 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
                     }
                     v
                 });
+                if let Some(s) = conn.session.as_ref() {
+                    crate::agents::acted(&s.id, &method, res.as_ref().err().map(|e| e.code));
+                }
                 match res {
                     Ok(v) => (
                         Outcome::Reply(serde_json::json!({"jsonrpc":"2.0","id":id,"result":v})),
@@ -277,6 +301,10 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
                 policy: Some(n),
             });
         }
+        // P8-M3: the viewer window's live refresh (status every 3 s) is not an action to log.
+        let viewer_poll = info.method == "status"
+            && conn.session.as_ref().is_some_and(|s| s.client == crate::agents::VIEWER_CLIENT);
+        if !viewer_poll {
         shared.log.record(&Entry {
             ts_ms: protocol::now_ms(),
             session: conn.session.as_ref().map(|s| s.id.as_str()),
@@ -287,6 +315,7 @@ async fn serve(pipe: NamedPipeServer, shared: Arc<Shared>) -> io::Result<()> {
             ms: t0.elapsed().as_secs_f64() * 1000.0,
             policy,
         });
+        }
 
         let (reply, close) = match outcome {
             Outcome::Reply(v) => (v, false),

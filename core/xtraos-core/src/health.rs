@@ -202,7 +202,7 @@ fn fixed_disks() -> Vec<(String, f64, f64)> {
 }
 
 /// (pid, exe name lower case) of every process.
-fn processes() -> Vec<(u32, String)> {
+pub(crate) fn processes() -> Vec<(u32, String)> {
     let mut out = Vec::new();
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);

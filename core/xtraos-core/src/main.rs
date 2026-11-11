@@ -62,6 +62,8 @@ async fn run() -> std::io::Result<()> {
         )
     })?;
     pairing::write_connection_info(&dir, &pipe)?;
+    // P7-M4 (ADR 0063): scheduled routines run inside the core, never via Task Scheduler.
+    xtraos_core::routines::start(log.clone());
 
     eprintln!("[xtraos-core] {} listening on {pipe}", protocol::VERSION);
     eprintln!("[xtraos-core] action log: {}", log.path().display());

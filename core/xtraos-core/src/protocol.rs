@@ -214,7 +214,13 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                 "version": VERSION,
                 "session": session.id,
                 "client": session.client,
-                "state": if crate::safety::stopped() { "stopped" } else { "running" },
+                // P8-M2 (ADR 0060): what this client may do.
+                "profile": crate::clients::profile_name(&session.client),
+                "state": if crate::safety::stopped() { "stopped" }
+                    else if crate::agents::is_paused(&session.client) { "paused" }
+                    else { "running" },
+                // P8-M3 (ADR 0061): agents connected now (and ended in the last 10 min).
+                "agents": crate::agents::status_json(),
                 "uptime_ms": ctx.started.elapsed().as_millis() as u64,
                 "pipe": ctx.pipe,
                 "stopped": crate::safety::stopped(),
@@ -224,6 +230,8 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                 "dialog": crate::winmgr::foreground_dialog(),
                 // ADR 0050: CPU/RAM headline and active warnings.
                 "health": crate::health::status_json(),
+                // P8-M1 (ADR 0059): which agent session holds which window.
+                "locks": crate::locks::status_json(),
             }),
             method,
         ),
@@ -276,7 +284,20 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
                 },
             )
         }
-        _ => invalid(&id, "unknown method", &method),
+        // A paired client named a tool that does not exist: say which, and where the list is.
+        m => (
+            Outcome::Reply(error(
+                &id,
+                ErrorCode::InvalidArgs,
+                &format!("unknown tool '{}'", m.chars().take(60).collect::<String>()),
+                "Tools are listed in docs/04-mcp-tool-contract.md; skills (files.*, office.*, routine.* …) go through run_skill — see list_skills.",
+            )),
+            LogInfo {
+                method: method.clone(),
+                ok: false,
+                code: Some("INVALID_ARGS"),
+            },
+        ),
     }
 }
 

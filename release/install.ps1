@@ -22,7 +22,7 @@ if ($build -lt 19041) { throw "XtraOS Agent needs Windows 10 2004 (build 19041) 
 
 Write-Host "Installing XtraOS Agent $version to $Prefix"
 New-Item -ItemType Directory -Force $Prefix | Out-Null
-foreach ($item in 'bin', 'mcp', 'node', 'xtraos-mcp.cmd', 'uninstall.ps1', 'INSTALL.md', 'THIRD-PARTY.md', 'VERSION') {
+foreach ($item in 'bin', 'mcp', 'node', 'xtraos-mcp.cmd', 'xtraos.cmd', 'uninstall.ps1', 'INSTALL.md', 'THIRD-PARTY.md', 'VERSION') {
   $from = Join-Path $src $item
   $to = Join-Path $Prefix $item
   if (Test-Path $to) { Remove-Item -Recurse -Force $to }
@@ -52,7 +52,12 @@ Write-Host @"
 Done. The MCP server starts the XtraOS core by itself when an agent first uses it
 (tray icon appears; Ctrl+Alt+Esc or tray Stop halts the agent at any time).
 
-Claude Code:
+Connect your AI tools (shows what it would change; add --apply to write it):
+  "$Prefix\xtraos.cmd" setup
+Check the install at any time:
+  "$Prefix\xtraos.cmd" doctor
+
+Or by hand. Claude Code:
   claude mcp add --scope user xtraos -- "$mcp"
 
 Claude Desktop (claude_desktop_config.json) / other MCP clients:

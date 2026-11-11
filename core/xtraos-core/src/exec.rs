@@ -31,6 +31,8 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, ActError> {
         return crate::audit::run(p);
     }
     if crate::helper::owns_refs(p) {
+        // P8-M2: the admin helper is another process; a background-only client may not use it.
+        crate::input::real_input_allowed()?;
         return crate::helper::forward(method, p);
     }
     match dispatch_local(method, p) {
@@ -39,14 +41,61 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, ActError> {
                 && crate::helper::ROUTABLE.contains(&method)
                 && crate::helper::connected() =>
         {
+            crate::input::real_input_allowed()?;
             crate::helper::forward(method, p)
         }
         r => r,
     }
 }
 
+/// One correct call per tool, shown as the hint of an `INVALID_ARGS` (P6-M3, ADR 0046): an
+/// example teaches the shape faster than a pointer to the contract file.
+pub fn example(method: &str) -> Option<&'static str> {
+    Some(match method {
+        "click" => "Example: {\"ref\":\"e12\"} or {\"window\":\"w123\",\"x\":400,\"y\":300}",
+        "type" => "Example: {\"window\":\"w123\",\"text\":\"hello\",\"focus\":true}",
+        "press_keys" => "Example: {\"window\":\"w123\",\"keys\":[\"Ctrl+S\"],\"focus\":true}",
+        "scroll" => "Example: {\"ref\":\"e12\",\"dy\":3} or {\"x\":400,\"y\":300,\"dy\":-3}",
+        "drag" => "Example: {\"from_ref\":\"e12\",\"to_x\":800,\"to_y\":400}",
+        "mouse" => "Example: {\"action\":\"move\",\"x\":400,\"y\":300}",
+        "set_value" => "Example: {\"ref\":\"e12\",\"value\":\"hello\"}",
+        "clipboard" => "Example: {\"op\":\"set\",\"text\":\"hello\"} or {\"op\":\"get\"}",
+        "observe" => "Example: {\"window\":\"w123\"} or {\"window\":\"Notepad\",\"full\":true}",
+        "find" => "Example: {\"query\":\"Save\",\"window\":\"w123\"}",
+        "read_text" => "Example: {\"window\":\"w123\"} or {\"ref\":\"e12\"}",
+        "screenshot" => "Example: {\"window\":\"w123\",\"scale\":0.5}",
+        "ocr" => "Example: {\"window\":\"w123\",\"query\":\"Play\"}",
+        "wait_for" => "Example: {\"window_title\":\"Save As\",\"timeout_ms\":10000}",
+        "list_windows" => "Example: {} or {\"filter\":\"chrome\"}",
+        "focus_window" => "Example: {\"window\":\"w123\"} or {\"window\":\"Notepad\"}",
+        "launch_app" => "Example: {\"app\":\"notepad\"} or {\"app\":\"chrome\",\"args\":[\"https://example.com\"]}",
+        "close_window" => "Example: {\"window\":\"w123\"}",
+        "window_bounds" => "Example: {\"window\":\"w123\",\"x\":0,\"y\":0,\"w\":960,\"h\":1040}",
+        "run_skill" => "Example: {\"name\":\"files.find\",\"args\":{\"path\":\"C:/Users/me\",\"pattern\":\"*.pdf\"}}",
+        "batch" => "Example: {\"steps\":[{\"tool\":\"click\",\"args\":{\"ref\":\"e12\"}}]}",
+        "ask_human" => "Example: {\"message\":\"Sign in, then press OK\",\"kind\":\"task\"}",
+        _ => return None,
+    })
+}
+
 /// Runs one OS method in this process (the core, or inside the admin helper).
 pub fn dispatch_local(method: &str, p: &Value) -> Result<Value, ActError> {
+    // P8-M1 (ADR 0059): another agent session working in the same window → wait, then WINDOW_BUSY.
+    let leased = crate::locks::acquire(method, p)?;
+    let r = run_local(method, p);
+    crate::locks::done(&leased);
+    r.map_err(|mut e| {
+        // Only the generic pointer is replaced; specific hints stay.
+        if e.code == "INVALID_ARGS" && e.hint.starts_with("Check the tool schema") {
+            if let Some(x) = example(method) {
+                e.hint = x;
+            }
+        }
+        e
+    })
+}
+
+fn run_local(method: &str, p: &Value) -> Result<Value, ActError> {
     if safety::METHODS.contains(&method) {
         safety::run(method, p)
     } else if winmgr::METHODS.contains(&method) {
@@ -209,6 +258,49 @@ mod tests {
 
     fn run(p: Value) -> Result<Value, ActError> {
         batch(&p, &mut |_| {})
+    }
+
+    // P6-M3 (ADR 0046): a bad call gets one correct example instead of a pointer to a doc.
+    #[test]
+    fn invalid_args_carry_an_example() {
+        for (tool, args) in [
+            ("scroll", json!({"x": 1, "y": 1})),
+            ("mouse", json!({"action": "teleport"})),
+            ("focus_window", json!({})),
+            ("click", json!({})),
+        ] {
+            let e = dispatch_local(tool, &args).unwrap_err();
+            assert_eq!(e.code, "INVALID_ARGS", "{tool}");
+            assert!(e.hint.starts_with("Example: {"), "{tool}: {}", e.hint);
+        }
+        // Every example is valid JSON, so an agent can copy it.
+        for tool in BATCH_TOOLS
+            .iter()
+            .chain(["batch", "ask_human", "screenshot"].iter())
+        {
+            if let Some(x) = example(tool) {
+                for part in x.trim_start_matches("Example: ").split(" or ") {
+                    assert!(
+                        serde_json::from_str::<Value>(part).is_ok(),
+                        "{tool}: {part}"
+                    );
+                }
+            }
+        }
+        // A specific hint is kept (an unknown window name is not a schema problem).
+        let e =
+            dispatch_local("focus_window", &json!({"window": "no-such-window-xyz"})).unwrap_err();
+        assert_eq!(e.code, "WINDOW_NOT_FOUND");
+        assert!(!e.hint.starts_with("Example"));
+    }
+
+    // P6-M3: `keys` may be one string. With no such window the call gets as far as the window.
+    #[test]
+    fn press_keys_accepts_one_string() {
+        let e = dispatch_local("press_keys", &json!({"keys": "Ctrl+S", "window": 1})).unwrap_err();
+        assert_eq!(e.code, "WINDOW_NOT_FOUND");
+        let e = dispatch_local("press_keys", &json!({"keys": 5, "window": 1})).unwrap_err();
+        assert_eq!(e.code, "WINDOW_NOT_FOUND", "the window is checked first");
     }
 
     #[test]

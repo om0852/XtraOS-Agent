@@ -88,6 +88,7 @@ class Testbed : Form, ICommandable
     Panel pad, dropTarget, drawPad;
     Label dragSource;
     string dropped = "";
+    string modalResult = "";
     bool drawing;
     int pathCount;
     Point pathFirst, pathLast;
@@ -191,6 +192,12 @@ class Testbed : Form, ICommandable
             case "state": return State();
             case "reset": Reset(); return "{\"ok\":true}";
             case "fillpassword": password.Text = "hunter2-secret"; return "{\"ok\":true}";
+            // P6-M4: a real owned modal message box (class #32770); the answer lands in state.
+            // BeginInvoke: the box blocks the UI thread, the reply must go out first.
+            case "modal":
+                modalResult = "open";
+                BeginInvoke(new Action(() => { modalResult = MessageBox.Show(this, "Save changes?", "XtraOS Confirm", MessageBoxButtons.YesNoCancel).ToString(); }));
+                return "{\"ok\":true}";
             case "quit": return "{\"ok\":true}";
             default: return "{\"error\":\"unknown command\"}";
         }
@@ -230,6 +237,7 @@ class Testbed : Form, ICommandable
           .Append(",\"first\":[").Append(pathFirst.X).Append(',').Append(pathFirst.Y)
           .Append("],\"last\":[").Append(pathLast.X).Append(',').Append(pathLast.Y).Append("]}");
         sb.Append(",\"keys\":").Append(Arr(keys));
+        sb.Append(",\"modal\":").Append(Str(modalResult));
         return sb.Append('}').ToString();
     }
 

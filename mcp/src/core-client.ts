@@ -56,7 +56,7 @@ export class CoreClient {
   private buf = '';
   private nextId = 1;
   private pending = new Map<number, Pending>();
-  private readonly clientName: string;
+  private clientName: string;
   private readonly getConnection: () => Connection;
   private readonly timeoutMs: number;
 
@@ -71,8 +71,22 @@ export class CoreClient {
     // A call may legitimately take up to its own timeout_ms (waiting for the user to be idle,
     // waiting for a launched window); allow that plus a margin.
     const t = typeof params?.timeout_ms === 'number' ? params.timeout_ms + 5_000 : 0;
-    return this.send(method, params, Math.max(this.timeoutMs, t));
+    const r = await this.send(method, params, Math.max(this.timeoutMs, t));
+    // ADR 0050: the core adds `health_warning` while the PC is under strain.
+    const w = (r as { health_warning?: unknown } | null)?.health_warning;
+    if (typeof w === 'string') this.healthWarning = w;
+    return r;
   }
+
+  /** P8-M2 (ADR 0060): pair under this name from now on (re-pairs if already connected). */
+  setClientName(name: string): void {
+    if (name === this.clientName) return;
+    this.clientName = name;
+    this.close();
+  }
+
+  /** The last health warning the core sent during the current tool call (ADR 0050). */
+  healthWarning: string | null = null;
 
   close(): void {
     this.sock?.destroy();
@@ -99,7 +113,9 @@ export class CoreClient {
       this.lastAutostart = Date.now();
       // Detached and hidden: the core lives in the user's session (tray icon, kill switch)
       // and outlives this MCP server.
-      spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      // Its own folder as working directory: the long-running core must not hold the client's
+      // folder (a project or an extracted bundle could not be deleted while it runs).
+      spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true, cwd: path.dirname(exe) }).unref();
       const deadline = Date.now() + 10_000;
       for (;;) {
         await new Promise((r) => setTimeout(r, 200));

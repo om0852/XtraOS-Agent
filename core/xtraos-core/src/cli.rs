@@ -98,8 +98,13 @@ fn connect() -> Result<(std::fs::File, String), String> {
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         keep_std_handles_private();
-        std::process::Command::new(&exe)
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+        let mut cmd = std::process::Command::new(&exe);
+        // Its own folder as working directory: the long-running core must not hold the caller's
+        // folder (an extracted bundle or a project could not be deleted while it runs).
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -138,6 +143,40 @@ fn rpc(
     r.read_line(&mut reply)
         .map_err(|e| format!("pipe read: {e}"))?;
     serde_json::from_str(&reply).map_err(|e| format!("bad reply: {e}"))
+}
+
+type ViewerConn = (std::fs::File, BufReader<std::fs::File>, u64);
+static VIEWER_CONN: std::sync::Mutex<Option<ViewerConn>> = std::sync::Mutex::new(None);
+
+/// P8-M3 (ADR 0061): the viewer window's `status`, over one kept connection (paired as
+/// `xtraos-viewer`). Never starts the core: Err when it is not running.
+pub fn viewer_status() -> Result<Value, String> {
+    let mut g = VIEWER_CONN.lock().unwrap_or_else(|e| e.into_inner());
+    for attempt in 0..2 {
+        if g.is_none() {
+            let (p, t) = pipe().zip(token()).ok_or("the XtraOS core is not set up")?;
+            let f = open_pipe(&p).map_err(|_| "the XtraOS core is not running".to_string())?;
+            let mut r = BufReader::new(f.try_clone().map_err(|e| e.to_string())?);
+            let mut w = f;
+            let v = rpc(&mut w, &mut r, 1, "pair", json!({"token": t, "client": crate::agents::VIEWER_CLIENT}))?;
+            if v.get("result").is_none() {
+                return Err("could not pair with the XtraOS core".into());
+            }
+            *g = Some((w, r, 1));
+        }
+        let (w, r, id) = g.as_mut().expect("connected above");
+        *id += 1;
+        match rpc(w, r, *id, "status", json!({})) {
+            Ok(v) => return v.get("result").cloned().ok_or_else(|| "no status".into()),
+            Err(e) => {
+                *g = None; // the core restarted: reconnect once
+                if attempt == 1 {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err("the XtraOS core is not reachable".into())
 }
 
 /// Entry point for `xtraos-core call …`. Returns the exit code.

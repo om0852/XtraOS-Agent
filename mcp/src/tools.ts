@@ -27,10 +27,12 @@ export type ToolDef = {
 const int = (description: string) => ({ type: 'integer', description });
 const WINDOW = {
   type: ['string', 'integer'],
-  description: 'Window ref from list_windows (e.g. "w460650") or its integer handle, or "desktop" for the desktop icon view. Mouse: optional guard (point must be inside it). Keyboard: required and must be the foreground window.',
+  description: 'Window: ref from list_windows ("w460650"), part of its title, a process name ("chrome"), or "desktop" (icon view). Mouse: the point must be inside it.',
 };
-const FOCUS = { type: 'boolean', description: 'Bring the window to the front first (like focus_window), default false' };
-const WINDOW_REQ = { type: ['string', 'integer'], description: 'Window ref from list_windows (e.g. "w460650") or its integer handle, or "desktop" for the desktop icon view' };
+const FOCUS = { type: 'boolean', description: 'Bring the window to the front and leave it there' };
+/** P6-M6 (ADR 0049): borrow the foreground for one burst, then give the user's window back. */
+const BORROW = { type: 'boolean', description: 'Default true: not in front → brought up when the user is idle, then theirs back' };
+const WINDOW_REQ = { type: ['string', 'integer'], description: 'Window: ref from list_windows ("w460650"), part of its title, a process name ("chrome"), or "desktop" (icon view)' };
 
 type Win = { ref: string; process: string; title: string; x: number; y: number; w: number; h: number; state: string; focused: boolean; elevated: boolean; agent?: boolean; reused?: boolean };
 /** One compact line per window (docs/06 token budget). */
@@ -48,8 +50,17 @@ const RESTORE = { type: 'boolean', description: 'Put the cursor back afterwards 
 /** "ok click e12 · background (invoke)" / "ok click ×1 at (x,y) · input" */
 const how = (r: any) =>
   r.mode === 'background' ? ` · background (${r.via}${r.foreground_restored ? ', focus kept' : ''})` : ' · input';
+/** " · window borrowed 640 ms" (P6-M6) */
+const lent = (r: any) => (typeof r.borrowed_ms === 'number' ? ` · window borrowed ${r.borrowed_ms} ms` : '');
 
-type Status = { version: string; session: string; client: string; state: string; uptime_ms: number; kill_hotkey: string | null; admin_helper?: { running: boolean; pid?: number } };
+type Status = {
+  version: string; session: string; client: string; state: string; uptime_ms: number; kill_hotkey: string | null;
+  profile?: string;
+  admin_helper?: { running: boolean; pid?: number };
+  dialog?: { window: string; title: string; blocking: boolean } | null;
+  health?: { cpu_pct: number | null; ram_pct: number | null; warnings: string[] };
+  locks?: { window: string; title: string; client: string; session: string; idle_s: number }[];
+};
 
 /** Forwards to the core and renders a compact one-line result (docs/06: <= 30 tokens). */
 const forward = (method: string, render: (r: any, a: Record<string, unknown>) => string) =>
@@ -60,14 +71,23 @@ export const TOOLS: ToolDef[] = [
     name: 'status',
     description:
       'Shows whether the XtraOS core is running and paired: version, session, state (running / stopped by the ' +
-      'user) and the kill-switch hotkey. Call this first; if it fails, ask the user to start the XtraOS core. ' +
-      'If stopped: stop entirely — only the user can resume, from the XtraOS tray icon.',
+      'user), kill-switch hotkey, `dialog` (front window\'s message box). Call this first; if it fails, ask the user to start the XtraOS core. ' +
+      'If stopped or paused: stop entirely; only the user can resume, from the XtraOS tray icon.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run(core) {
       const s = (await core.call('status')) as Status;
       return `XtraOS core ${s.version} · ${s.state} · session ${s.session} (${s.client}) · up ${Math.round(s.uptime_ms / 1000)}s` +
         (s.kill_hotkey ? ` · stop: ${s.kill_hotkey}` : ' · stop: tray icon') +
-        (s.admin_helper?.running ? ` · admin helper on (pid ${s.admin_helper.pid})` : '');
+        (s.admin_helper?.running ? ` · admin helper on (pid ${s.admin_helper.pid})` : '') +
+        (s.health && s.health.ram_pct != null ? ` · CPU ${Math.round(s.health.cpu_pct ?? 0)} % RAM ${Math.round(s.health.ram_pct)} %` : '') +
+        (s.dialog ? `\n!! dialog ${s.dialog.window} "${s.dialog.title}"${s.dialog.blocking ? ' (blocking)' : ''}: observe it` : '') +
+        (s.health?.warnings.length ? `\n⚠ ${s.health.warnings.join('; ')}` : '') +
+        // P8-M1: windows other agents are working in (acting there gives WINDOW_BUSY).
+        (s.locks?.filter((l) => l.session !== s.session).length
+          ? `\nin use by other agents: ${s.locks.filter((l) => l.session !== s.session).map((l) => `${l.window} "${l.title}" (${l.client}, ${l.idle_s}s idle)`).join('; ')}`
+          : '') +
+        // P8-M2 (ADR 0060): what this agent may do — shown only when limited.
+        (s.profile && s.profile !== 'full' ? `\nyour access on this PC: ${s.profile}` : '');
     },
   },
   {
@@ -75,58 +95,58 @@ export const TOOLS: ToolDef[] = [
     description:
       'Clicks an element or a point. PREFER `ref` (from observe/find): a plain left click on a ref runs in the ' +
       'background through the element itself — no cursor move, no keystrokes, the user keeps working. ' +
-      'Otherwise real mouse input at (x, y): it waits until the user is idle, refuses (TARGET_OBSCURED) if the point ' +
-      'is not inside `window`, aborts (USER_ACTIVE) if the user moves the mouse, and puts the cursor back.',
+      'Otherwise real mouse input at (x, y): waits until the user is idle, borrows the window if it is covered, ' +
+      'aborts (USER_ACTIVE) if the user moves the mouse, puts the cursor back.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: REF, x: X, y: Y, window: WINDOW, button: BUTTON,
         clicks: { type: 'integer', minimum: 1, maximum: 3, description: '1 = click, 2 = double, 3 = triple' },
         modifiers: { type: 'array', items: { type: 'string', enum: ['ctrl', 'shift', 'alt', 'win'] }, description: 'Keys held during the click' },
-        idle_ms: IDLE, timeout_ms: TIMEOUT, restore_cursor: RESTORE,
+        idle_ms: IDLE, timeout_ms: TIMEOUT, restore_cursor: RESTORE, borrow: BORROW,
       },
       additionalProperties: false,
     },
     run: forward('click', (r, a) =>
-      r.mode === 'background' ? `ok click ${a.ref}${how(r)}` : `ok click ×${r.clicks} at (${r.at[0]},${r.at[1]})${how(r)}`),
+      (r.mode === 'background' ? `ok click ${a.ref}${how(r)}` : `ok click ×${r.clicks} at (${r.at[0]},${r.at[1]})${how(r)}`) + lent(r)),
   },
   {
     name: 'type',
     description:
-      'Types unicode text (any language, emoji) with real keyboard input into `window`, which must be the ' +
-      'foreground window (else NEEDS_HUMAN, nothing typed). Waits until the user is idle. Newline = Enter, tab = Tab. ' +
-      'The text is never logged. To fill a field without the keyboard, prefer set_value(ref).',
+      'Types text (any language, emoji) with real keys into field `ref` or the focused field of `window`. ' +
+      'A window not in front is borrowed (see borrow). Newline = Enter. Never logged. Text inputs: set_value(ref) needs no keys.',
     inputSchema: {
       type: 'object',
       properties: {
+        ref: REF,
         window: WINDOW,
         text: { type: 'string', maxLength: 10000, description: 'Text to type' },
         submit: { type: 'boolean', description: 'Press Enter afterwards' },
-        focus: FOCUS,
+        focus: FOCUS, borrow: BORROW,
         idle_ms: IDLE, timeout_ms: TIMEOUT,
       },
-      required: ['window', 'text'],
+      required: ['text'],
       additionalProperties: false,
     },
-    run: forward('type', (r) => `ok typed ${r.typed_chars} chars${r.submitted ? ' + Enter' : ''}`),
+    run: forward('type', (r) => `ok typed ${r.typed_chars} chars${r.submitted ? ' + Enter' : ''}${lent(r)}`),
   },
   {
     name: 'press_keys',
     description:
-      'Presses key chords in order with real keyboard input, e.g. ["Ctrl+S"], ["Ctrl+Shift+P"], ["Alt+F4"], ["Enter"]. ' +
-      '`window` must be the foreground window (else NEEDS_HUMAN). Modifiers are always released.',
+      'Presses key chords in order with real keys, e.g. ["Ctrl+S"], ["Alt+F4"], ["Enter"]. A window not in front is ' +
+      'borrowed (see borrow). Modifiers always released.',
     inputSchema: {
       type: 'object',
       properties: {
         window: WINDOW,
-        keys: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100, description: 'Chords, pressed in order' },
-        focus: FOCUS,
+        keys: { type: ['array', 'string'], items: { type: 'string' }, minItems: 1, maxItems: 100, description: 'Chords in order, e.g. ["Ctrl+S"]; or one string' },
+        focus: FOCUS, borrow: BORROW,
         idle_ms: IDLE, timeout_ms: TIMEOUT,
       },
       required: ['window', 'keys'],
       additionalProperties: false,
     },
-    run: forward('press_keys', (r) => `ok ${r.chords} chord(s)`),
+    run: forward('press_keys', (r) => `ok ${r.chords} chord(s)${lent(r)}`),
   },
   {
     name: 'scroll',
@@ -197,15 +217,17 @@ export const TOOLS: ToolDef[] = [
       'Reads a window as compact lines with element refs: `e5 Button "Save"`, `e7 Edit "Search" = "text"`, ' +
       '`[x]` checked, `(off)` disabled, `***` password (never revealed). Default: the foreground window. A repeat ' +
       'call on the same window returns only what changed (+ added, - removed, ~ changed) unless full=true. ' +
-      '`opaque` = few accessible elements (canvas/game): use screenshot. Refs work in click, scroll, drag, set_value.',
+      'A first `!! dialog` line = alert/message box and its buttons: answer it first. ' +
+      '`opaque` (canvas/game): use screenshot. Refs work in click, scroll, drag, set_value.',
     inputSchema: {
       type: 'object',
       properties: {
         window: WINDOW_REQ,
-        scope_ref: { ...REF, description: 'Only this element\'s subtree (a list, pane or dialog): fewer tokens on big windows' },
+        scope_ref: { ...REF, description: 'Only this element\'s subtree (list, pane, dialog)' },
         full: { type: 'boolean', description: 'Full list instead of a diff' },
-        bounds: { type: 'boolean', description: 'Also each element\'s screen place: @cx,cy (x,y wxh) (full list)' },
+        bounds: { type: 'boolean', description: 'Also each element\'s screen place @cx,cy (x,y wxh)' },
         max_elements: { type: 'integer', minimum: 1, maximum: 500, description: 'Default 120' },
+        reveal: { type: 'boolean', description: 'Minimized browser/Electron app: show briefly (no focus) to read its page' },
       },
       additionalProperties: false,
     },
@@ -307,26 +329,29 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'set_value',
     description:
-      'Sets the text of a field in the background (no keystrokes, no focus change) via UI Automation. ' +
-      'Refuses password fields (NEEDS_HUMAN: the user types passwords). If the element has no settable value, ' +
-      'use click(ref) + type.',
+      'Sets a field in the background (no keys, no focus change). On a drop-down it selects the option with that ' +
+      'name. Refuses password fields (NEEDS_HUMAN). No settable value: type {ref, text}.',
     inputSchema: {
       type: 'object',
       properties: { ref: REF, value: { type: 'string', maxLength: 10000 } },
       required: ['ref', 'value'],
       additionalProperties: false,
     },
-    run: forward('set_value', (r, a) => `ok set ${a.ref} (${r.chars} chars)${how(r)}`),
+    run: forward('set_value', (r, a) =>
+      r.via === 'select_option'
+        ? `ok selected "${r.option}" in ${a.ref}${how(r)}`
+        : `ok set ${a.ref} (${r.chars} chars)${how(r)}${r.note ? ` · note: ${r.note}` : ''}`),
   },
   {
     name: 'wait_for',
     description:
-      'Waits in the core (no polling from you) until ALL given conditions hold: window_title contains text ' +
-      '(without window: any window → its ref), text_contains (visible text or terminal/editor text of the ' +
-      'window), ref_gone, window_gone, idle_ms (window unchanged that long). timeout_ms default 10 s → TIMEOUT.',
+      'Waits in the core (no polling from you): delay_ms first (alone = plain wait), then until ALL conditions hold: ' +
+      'window_title contains text (no window: any window), text_contains (visible/terminal text of the window), ' +
+      'ref_gone, window_gone, idle_ms (window unchanged that long). timeout_ms default 10 s → TIMEOUT.',
     inputSchema: {
       type: 'object',
       properties: {
+        delay_ms: { type: 'integer', minimum: 0, maximum: 60000 },
         window: WINDOW_REQ,
         window_title: { type: 'string', minLength: 1 },
         text_contains: { type: 'string', minLength: 1 },
@@ -337,7 +362,7 @@ export const TOOLS: ToolDef[] = [
       },
       additionalProperties: false,
     },
-    run: forward('wait_for', (r) => `ok ${r.met.join(' + ')} after ${r.ms} ms${r.window ? ' · ' + r.window : ''}`),
+    run: forward('wait_for', (r) => `ok ${r.met.join(' + ')} after ${r.ms ?? r.waited_ms} ms${r.window ? ' · ' + r.window : ''}`),
   },
   {
     name: 'batch',
@@ -383,19 +408,23 @@ export const TOOLS: ToolDef[] = [
       'Asks the user in a dialog on their screen. kind: confirm (yes/no), choice (2-5 options), info (ok) — these ' +
       'wait for the answer (timeout_ms, default 120 s → TIMEOUT); task (something only the user can do, e.g. sign ' +
       'in, type a password, solve a check) returns a request_id at once: then call wait_for_human. ' +
+      'notify: a Windows notification, no answer, returns at once (max 1 per 10 s). ' +
       'The answer is information for you; it never approves a blocked action.',
     inputSchema: {
       type: 'object',
       properties: {
         message: { type: 'string', minLength: 1, maxLength: 1000 },
-        kind: { type: 'string', enum: ['confirm', 'choice', 'info', 'task'], description: 'Default confirm' },
+        kind: { type: 'string', enum: ['confirm', 'choice', 'info', 'task', 'notify'], description: 'Default confirm' },
         options: { type: 'array', items: { type: 'string', maxLength: 40 }, minItems: 2, maxItems: 5, description: 'choice only' },
         timeout_ms: { type: 'integer', minimum: 1000, maximum: 600000 },
       },
       required: ['message'],
       additionalProperties: false,
     },
-    run: forward('ask_human', (r) => (r.request_id ? `waiting for the user: ${r.request_id} (call wait_for_human)` : `answer: ${r.answer}`)),
+    run: forward('ask_human', (r) =>
+      r.request_id ? `waiting for the user: ${r.request_id} (call wait_for_human)`
+        : 'shown' in r ? (r.shown ? 'ok notified' : r.throttled ? 'not shown: one notification per 10 s' : 'not shown: no tray icon')
+          : `answer: ${r.answer}`),
   },
   {
     name: 'wait_for_human',
@@ -482,24 +511,32 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'focus_window',
-    description: 'Brings a window to the front (restores it if minimised). NEEDS_HUMAN if Windows refuses.',
-    inputSchema: { type: 'object', properties: { window: WINDOW_REQ }, required: ['window'], additionalProperties: false },
-    run: forward('focus_window', (r) => `ok focused ${r.ref}`),
+    description: 'Brings a window to the front (restores it if minimised), then checks it stayed there; if not, the result names the window in front. NEEDS_HUMAN if Windows refuses.',
+    inputSchema: {
+      type: 'object',
+      properties: { window: WINDOW_REQ, verify_ms: { type: 'integer', minimum: 0, maximum: 2000, description: 'Check again after ms (default 300, 0 = off)' } },
+      required: ['window'],
+      additionalProperties: false,
+    },
+    run: forward('focus_window', (r) =>
+      r.focused
+        ? `ok focused ${r.ref}`
+        : `NOT in front: ${r.ref} lost the foreground${r.taken_by ? ` to ${r.taken_by.ref} ${r.taken_by.process} "${String(r.taken_by.title).slice(0, 60)}"` : ''}. Retry, or ask the user to click the window.`),
   },
   {
     name: 'launch_app',
     description:
-      'Starts an app and returns its NEW window ref. app = name ("notepad", "chrome", "firefox"), full path, or AUMID. ' +
-      'If the agent already opened the same app + args and that window is still open, it is reused (focused, `reused`) ' +
-      'instead of opening a duplicate; reuse=false forces a new window. ' +
-      'elevated=true asks the user via the Windows admin (UAC) prompt; admin windows cannot be controlled (ELEVATION_REQUIRED).',
+      'Starts an app and returns its NEW window ref. app = name ("notepad", "chrome"), full path, or AUMID. ' +
+      'A still-open window the agent opened with the same app + args is reused (`reused`). chrome:// / edge:// ' +
+      'pages in args are typed into the address bar. elevated=true: the user gets the UAC prompt; admin windows ' +
+      'cannot be controlled (ELEVATION_REQUIRED).',
     inputSchema: {
       type: 'object',
       properties: {
         app: { type: 'string' },
         args: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Command-line arguments' },
         elevated: { type: 'boolean' },
-        reuse: { type: 'boolean', description: 'Reuse a still-open window the agent opened the same way (default true)' },
+        reuse: { type: 'boolean', description: 'Default true; false = always a new window' },
         timeout_ms: { type: 'integer', minimum: 0, maximum: 60000, description: 'Wait for the window (default 15000)' },
       },
       required: ['app'],
@@ -565,13 +602,14 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'system',
     description:
-      'Common PC controls through the OS, in the background: battery (read), brightness (read; value 0-100 sets the ' +
+      'Common PC controls through the OS, in the background: health (read CPU, RAM, GPU, temperatures, disks, Wi-Fi, ' +
+      'apps using most memory, warnings), battery (read), brightness (read; value 0-100 sets the ' +
       'built-in screen), wifi / bluetooth (read; state on|off switches: asks the user first), lock and sleep (ask the ' +
       'user first). Not offered: shutdown/restart/sign-out, firewall, antivirus, accounts, network or registry changes.',
     inputSchema: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['battery', 'brightness', 'wifi', 'bluetooth', 'lock', 'sleep'] },
+        op: { type: 'string', enum: ['health', 'battery', 'brightness', 'wifi', 'bluetooth', 'lock', 'sleep'] },
         value: { type: 'integer', minimum: 0, maximum: 100 },
         state: { type: 'string', enum: ['on', 'off'] },
       },
@@ -648,13 +686,17 @@ export const TOOLS: ToolDef[] = [
       'and points are saved as locators (app + window title + element role/name, window-relative points) so replay ' +
       'works after windows move; a missing window/element fails that step (never guesses). Typed text becomes an ' +
       'argument (value1/text1…) you can change at replay. Password fields are never recorded. Max 50 steps, 30 min. ' +
-      'op=status / discard.',
+      'op=status / discard. Bug report: start with report:true → every action (also FAILED ones) gets a line + ' +
+      'screenshot; op=note {text} adds what you observed (expected vs actual); stop writes report.md in ' +
+      'Documents\\XtraOS reports.',
     inputSchema: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['start', 'stop', 'status', 'discard'] },
+        op: { type: 'string', enum: ['start', 'stop', 'status', 'discard', 'note'] },
         name: { type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$' },
         overwrite: { type: 'boolean' },
+        report: { type: 'boolean', description: 'start: also write a bug report (steps, screenshots, notes)' },
+        text: { type: 'string', maxLength: 1000, description: 'note: your observation' },
       },
       required: ['op'],
       additionalProperties: false,
@@ -775,3 +817,39 @@ export const TOOLS: ToolDef[] = [
     run: forward('clipboard', (r, a) => (a.op === 'get' ? (r.text ?? '(no text on clipboard)') : `ok clipboard set (${r.chars} chars)`)),
   },
 ];
+
+/** P5-M7 (ADR 0044): the `core` profile lists these 15 everyday tools (~3,400 tokens instead
+ * of ~8,500). A profile only shortens tools/list; every tool stays callable and policy-checked. */
+export const CORE_TOOLS = ['status', 'list_windows', 'launch_app', 'focus_window', 'observe', 'find', 'read_text', 'screenshot', 'click', 'type', 'press_keys', 'scroll', 'wait_for', 'list_skills', 'run_skill'];
+
+export type Profile = 'full' | 'core';
+
+/** `XTRAOS_TOOLS` → profile; an unknown value falls back to `full` (with `warning` set). */
+export function profileFrom(value: string | undefined): { profile: Profile; warning?: string } {
+  const v = (value ?? '').trim().toLowerCase();
+  if (v === '' || v === 'full') return { profile: 'full' };
+  if (v === 'core') return { profile: 'core' };
+  return { profile: 'full', warning: `unknown XTRAOS_TOOLS '${value}' (use core or full); listing all tools` };
+}
+
+/** P8-M2 (ADR 0060): the pairing name for an MCP client (`mcp:claude-code`); `xtraos-mcp` if unnamed. */
+export function mcpClientName(name: string | undefined): string {
+  const n = (name ?? '').trim().toLowerCase().replace(/[^a-z0-9._ -]/g, '').replace(/\s+/g, '-').slice(0, 56);
+  return n ? `mcp:${n}` : 'xtraos-mcp';
+}
+
+export const listedTools = (profile: Profile): ToolDef[] =>
+  profile === 'core' ? TOOLS.filter((t) => CORE_TOOLS.includes(t.name)) : TOOLS;
+
+/** P5-M7 (ADR 0044): sent once in the MCP `initialize` result. A how-to; adds no capability. */
+export const INSTRUCTIONS = [
+  'XtraOS Agent lets you see and operate this Windows PC. It reads apps through UI Automation, so prefer text over pixels.',
+  'How to work:',
+  '1. Get a window: list_windows, or launch_app (returns its ref, e.g. "w460650").',
+  '2. observe it: you get elements with refs like "e12". Repeat observe returns only what changed; pass full:true for the whole list.',
+  '3. Act on refs: click and scroll with a ref work in the background (no cursor, no focus change). type {ref, text} and press_keys borrow a window not in front while the user is idle.',
+  '4. Use find, read_text and wait_for instead of screenshots; use screenshot only when observe says the window is opaque.',
+  '5. run_skill does common jobs in one call (list_skills shows them, e.g. files.find).',
+  'Errors: STALE_REF → observe again. USER_ACTIVE → the user is using the mouse or keyboard; retry later. NEEDS_HUMAN / BLOCKED_BY_POLICY → the user must act or has not allowed it; tell them, do not work around it. STOPPED → the user pressed the kill switch (Ctrl+Alt+Esc); only they can resume.',
+  'Sending messages, deleting files and changing settings show the user an approval dialog. Passwords and payments are never typed by you.',
+].join('\n');

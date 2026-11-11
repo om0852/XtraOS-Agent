@@ -17,5 +17,17 @@
   "scripts": {
     "test": "node --test test/sdk.test.mjs"
   },
-  "private": true
+  "license": "MIT",
+  "author": "Om Sachin Salunke",
+  "homepage": "https://github.com/om0852/XtraOS-Agent/tree/main/sdk/node",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/om0852/XtraOS-Agent.git",
+    "directory": "sdk/node"
+  },
+  "bugs": "https://github.com/om0852/XtraOS-Agent/issues",
+  "keywords": ["xtraos", "ai-agent", "mcp", "windows", "ui-automation", "desktop-automation"],
+  "publishConfig": {
+    "access": "public"
+  }
 }

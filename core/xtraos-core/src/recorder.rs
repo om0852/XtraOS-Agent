@@ -19,8 +19,36 @@ use crate::{perceive, winmgr};
 pub const MAX_STEPS: usize = crate::exec::MAX_STEPS;
 const MAX_AGE: Duration = Duration::from_secs(30 * 60);
 
-/// A prepared step: the macro step, new skill arguments (typed text), notes.
-pub type Step = (Value, Vec<(String, Value)>, Vec<String>);
+/// A prepared step: the macro step, new skill arguments (typed text), notes, and for a bug
+/// report (ADR 0053) the action's window and a one-line description.
+pub type Step = (Value, Vec<(String, Value)>, Vec<String>, Evidence);
+
+#[derive(Clone, Debug, Default)]
+pub struct Evidence {
+    win: usize,
+    what: String,
+}
+
+/// One line of a bug report (ADR 0053).
+#[derive(Clone, Debug)]
+pub struct Entry {
+    pub what: String,
+    pub ok: bool,
+    pub error: Option<String>,
+    pub shot: Option<String>,
+    pub secs: f64,
+    pub note: bool,
+}
+
+struct Report {
+    dir: std::path::PathBuf,
+    entries: Vec<Entry>,
+    apps: Vec<String>,
+    started_local: String,
+    /// The last window an action of this recording used: a step or note without a window of
+    /// its own is pictured with it — never with whatever else is in front (the user's apps).
+    last_win: usize,
+}
 
 const RECORDABLE: &[&str] = &[
     "click",
@@ -50,6 +78,7 @@ struct Recording {
     args: Map<String, Value>,
     notes: Vec<String>,
     full: bool,
+    report: Option<Report>,
 }
 
 static REC: Mutex<Option<Recording>> = Mutex::new(None);
@@ -111,6 +140,26 @@ pub fn run(p: &Value) -> Result<Value, ActError> {
                     g.as_ref().map(|r| r.name.as_str()).unwrap_or("")
                 )));
             }
+            // ADR 0053: `report: true` also writes a bug report (steps, screenshots, notes).
+            let report = if p.get("report").and_then(Value::as_bool).unwrap_or(false) {
+                let local = local_time();
+                let dir = reports_dir().join(format!("{name}-{}", local.1));
+                std::fs::create_dir_all(&dir)
+                    .map_err(|e| bad(format!("report folder {}: {e}", dir.display())))?;
+                Some(Report {
+                    dir,
+                    entries: Vec::new(),
+                    apps: Vec::new(),
+                    started_local: local.0,
+                    last_win: 0,
+                })
+            } else {
+                None
+            };
+            let report_note = report
+                .as_ref()
+                .map(|r| format!("; bug report in {}", r.dir.display()))
+                .unwrap_or_default();
             *g = Some(Recording {
                 name: name.clone(),
                 started: Instant::now(),
@@ -118,10 +167,45 @@ pub fn run(p: &Value) -> Result<Value, ActError> {
                 args: Map::new(),
                 notes: Vec::new(),
                 full: false,
+                report,
             });
             Ok(
-                json!({"text": format!("recording '{name}': your successful actions are saved as steps (max {MAX_STEPS}, 30 min); stop with record_session stop")}),
+                json!({"text": format!("recording '{name}': your successful actions are saved as steps (max {MAX_STEPS}, 30 min){report_note}; stop with record_session stop")}),
             )
+        }
+        "note" => {
+            let text = p
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .ok_or_else(|| bad("'text' is required: what you observed"))?;
+            if text.chars().count() > 1000 {
+                return Err(bad("'text' is limited to 1000 characters"));
+            }
+            let (dir, secs, n, last) = {
+                let g = rec();
+                let r = g.as_ref().ok_or_else(|| bad("not recording"))?;
+                let rep = r
+                    .report
+                    .as_ref()
+                    .ok_or_else(|| bad("this recording has no report: start with report: true"))?;
+                (rep.dir.clone(), r.started.elapsed().as_secs_f64(), rep.entries.len() + 1, rep.last_win)
+            };
+            let shot = if last != 0 && winmgr::exists(last as crate::input::HWND) {
+                screenshot_to(last, &dir, n)
+            } else {
+                None
+            };
+            push_entry(Entry {
+                what: text.to_string(),
+                ok: true,
+                error: None,
+                shot,
+                secs,
+                note: true,
+            });
+            Ok(json!({"text": "note added to the bug report"}))
         }
         "status" => Ok(match rec().as_ref() {
             Some(r) => {
@@ -137,9 +221,12 @@ pub fn run(p: &Value) -> Result<Value, ActError> {
         "stop" => {
             let r = rec().take().ok_or_else(|| bad("not recording"))?;
             if r.steps.is_empty() {
-                return Ok(
-                    json!({"text": format!("recording '{}' had no steps: nothing saved", r.name)}),
-                );
+                let report = write_report(&r, None);
+                let mut msg = format!("recording '{}' had no successful steps: no skill saved", r.name);
+                if let Some(p) = &report {
+                    msg.push_str(&format!("\nbug report: {p}"));
+                }
+                return Ok(json!({"text": msg, "report": report}));
             }
             let overwrite = p.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
             let dir = crate::pairing::data_dir().join("skills");
@@ -174,10 +261,16 @@ pub fn run(p: &Value) -> Result<Value, ActError> {
             for n in &r.notes {
                 msg.push_str(&format!("\nnote: {n}"));
             }
-            Ok(json!({"text": msg, "path": path.display().to_string(), "steps": r.steps.len()}))
+            let report = write_report(&r, Some(&r.name));
+            if let Some(p) = &report {
+                msg.push_str(&format!("\nbug report: {p}"));
+            }
+            Ok(
+                json!({"text": msg, "path": path.display().to_string(), "steps": r.steps.len(), "report": report}),
+            )
         }
         o => Err(bad(format!(
-            "unknown op '{o}' (start, stop, status, discard)"
+            "unknown op '{o}' (start, stop, status, discard, note)"
         ))),
     }
 }
@@ -201,6 +294,9 @@ pub fn prepare(method: &str, p: &Value) -> Option<Step> {
     let mut args = p.as_object().cloned().unwrap_or_default();
     let mut new_args = Vec::new();
     let mut notes = Vec::new();
+    // Bug report evidence (ADR 0053): the action's window and its target element.
+    let mut win: crate::input::HWND = std::ptr::null_mut();
+    let mut target: Option<(&'static str, String)> = None;
     for k in ["ref", "from_ref", "to_ref", "scope_ref"] {
         let Some(v) = args.get(k).cloned() else {
             continue;
@@ -208,6 +304,10 @@ pub fn prepare(method: &str, p: &Value) -> Option<Step> {
         if let Some((h, role, name, password)) = perceive::ref_locator(&v) {
             if password {
                 return None; // never record anything aimed at a password field
+            }
+            if win.is_null() {
+                win = h;
+                target = Some((role, name.clone()));
             }
             if name.is_empty() {
                 notes.push(format!(
@@ -222,6 +322,9 @@ pub fn prepare(method: &str, p: &Value) -> Option<Step> {
     }
     for k in ["window", "to_window"] {
         if let Some(h) = args.get(k).and_then(|v| winmgr::resolve_window(v).ok()) {
+            if win.is_null() {
+                win = h;
+            }
             args.insert(k.into(), json!({"locate_window": window_locator(h)}));
         }
     }
@@ -241,6 +344,9 @@ pub fn prepare(method: &str, p: &Value) -> Option<Step> {
         });
         if h.is_null() {
             continue;
+        }
+        if win.is_null() {
+            win = h;
         }
         let f = winmgr::frame(h);
         let base = window_locator(h);
@@ -269,15 +375,64 @@ pub fn prepare(method: &str, p: &Value) -> Option<Step> {
             args.insert(k.into(), json!(format!("${{{n}}}")));
         }
     }
+    // No window of its own (e.g. an unknown ref): the report uses the recording's last window.
+    let title = if win.is_null() { String::new() } else { winmgr::title(win) };
+    let what = describe(method, p, target.as_ref().map(|(r, n)| (*r, n.as_str())), &title);
     Some((
         json!({"tool": method, "args": Value::Object(args)}),
         new_args,
         notes,
+        Evidence {
+            win: win as usize,
+            what,
+        },
     ))
+}
+
+/// One line for the bug report (pure): `click Button "Save" in "report.txt - Notepad"`.
+pub fn describe(method: &str, p: &Value, target: Option<(&str, &str)>, title: &str) -> String {
+    let clip = |s: &str, n| crate::perceive::clip(s, n);
+    let mut s = method.replace('_', " ");
+    match method {
+        "type" => {
+            let t = p["text"].as_str().unwrap_or("");
+            s = format!("type {} chars \"{}\"", t.chars().count(), clip(t, 40));
+            if p["submit"] == true {
+                s.push_str(" + Enter");
+            }
+        }
+        "set_value" => {
+            let t = p["value"].as_str().unwrap_or("");
+            s = format!("set value \"{}\"", clip(t, 40));
+        }
+        "press_keys" => {
+            let k: Vec<String> = match &p["keys"] {
+                Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+                Value::String(x) => vec![x.clone()],
+                _ => Vec::new(),
+            };
+            s = format!("press {}", k.join(", "));
+        }
+        "launch_app" => s = format!("launch {}", clip(p["app"].as_str().unwrap_or("?"), 60)),
+        "run_skill" => s = format!("run skill {}", p["name"].as_str().unwrap_or("?")),
+        "browser" => s = format!("browser {}", p["action"].as_str().unwrap_or("?")),
+        "click" if p.get("x").is_some() && target.is_none() => {
+            s = format!("click at ({}, {})", p["x"], p["y"]);
+        }
+        _ => {}
+    }
+    if let Some((role, name)) = target {
+        s.push_str(&format!(" {role} \"{}\"", clip(name, 50)));
+    }
+    if !title.is_empty() && method != "launch_app" {
+        s.push_str(&format!(" in \"{}\"", clip(title, 50)));
+    }
+    s
 }
 
 /// Keeps a prepared step after its action succeeded.
 pub fn commit(step: Step) {
+    report_step(&step.3, None);
     let mut g = rec();
     let Some(r) = g.as_mut() else { return };
     if r.full || r.started.elapsed() >= MAX_AGE {
@@ -289,12 +444,225 @@ pub fn commit(step: Step) {
             .push(format!("stopped recording at {MAX_STEPS} steps"));
         return;
     }
-    let (s, a, n) = step;
+    let (s, a, n, _) = step;
     r.steps.push(s);
     for (k, v) in a {
         r.args.insert(k, v);
     }
     r.notes.extend(n);
+}
+
+/// An action that failed while recording a bug report: reported, never replayed (ADR 0053).
+pub fn failed(step: Step, e: &ActError) {
+    report_step(&step.3, Some(format!("{}: {}", e.code, e.message)));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bug report (ADR 0053)
+
+fn push_entry(e: Entry) {
+    if let Some(rep) = rec().as_mut().and_then(|r| r.report.as_mut()) {
+        rep.entries.push(e);
+    }
+}
+
+/// Adds one step (ok or failed) with a screenshot of its window, taken after the UI settled.
+fn report_step(ev: &Evidence, error: Option<String>) {
+    let Some((dir, secs, n, last)) = rec().as_ref().and_then(|r| {
+        r.report
+            .as_ref()
+            .filter(|_| !r.full && r.started.elapsed() < MAX_AGE)
+            .map(|rep| (rep.dir.clone(), r.started.elapsed().as_secs_f64(), rep.entries.len() + 1, rep.last_win))
+    }) else {
+        return;
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    let alive = |w: usize| w != 0 && winmgr::exists(w as crate::input::HWND);
+    let win = if alive(ev.win) {
+        ev.win
+    } else if alive(last) {
+        last
+    } else {
+        0 // nothing of this recording to picture: no screenshot rather than another app
+    };
+    let shot = screenshot_to(win, &dir, n);
+    let app = if win == 0 {
+        String::new()
+    } else {
+        let h = win as crate::input::HWND;
+        format!(
+            "{} \"{}\"",
+            winmgr::process_name(winmgr::pid_of(h)),
+            crate::perceive::clip(&winmgr::title(h), 60)
+        )
+    };
+    if let Some(rep) = rec().as_mut().and_then(|r| r.report.as_mut()) {
+        if win != 0 {
+            rep.last_win = win;
+        }
+        if !app.is_empty() && !rep.apps.contains(&app) {
+            rep.apps.push(app);
+        }
+        rep.entries.push(Entry {
+            what: ev.what.clone(),
+            ok: error.is_none(),
+            error,
+            shot,
+            secs,
+            note: false,
+        });
+    }
+}
+
+/// `step-NN.png` of a window in the report folder; None when it cannot be captured
+/// (XtraOS's own windows, elevated windows, a closed window).
+fn screenshot_to(win: usize, dir: &std::path::Path, n: usize) -> Option<String> {
+    if win == 0 {
+        return None;
+    }
+    let (img, _, _) = crate::capture::grab(&json!({"window": winmgr::window_ref(win as crate::input::HWND)})).ok()?;
+    let (w, h, rgb) = crate::capture::downscale_rgb(&img, 0.6);
+    let png = crate::capture::png_rgb(w, h, &rgb).ok()?;
+    let name = format!("step-{n:02}.png");
+    std::fs::write(dir.join(&name), png).ok()?;
+    Some(name)
+}
+
+/// The user's Documents\XtraOS reports (%TEMP% when Documents is not available).
+fn reports_dir() -> std::path::PathBuf {
+    use windows::Win32::UI::Shell::{FOLDERID_Documents, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG};
+    let docs = unsafe { SHGetKnownFolderPath(&FOLDERID_Documents, KNOWN_FOLDER_FLAG(0), None) }
+        .ok()
+        .and_then(|p| {
+            let s = unsafe { p.to_string() }.ok();
+            unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(p.0 as _)) };
+            s
+        })
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir());
+    match docs {
+        Some(d) => d.join("XtraOS reports"),
+        None => std::env::temp_dir().join("XtraOS reports"),
+    }
+}
+
+/// ("2026-11-11 14:05", "20261111-140512") in local time.
+fn local_time() -> (String, String) {
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    (
+        format!("{:04}-{:02}-{:02} {:02}:{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute),
+        format!(
+            "{:04}{:02}{:02}-{:02}{:02}{:02}",
+            t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
+        ),
+    )
+}
+
+fn windows_version() -> String {
+    #[repr(C)]
+    struct OsVersionInfoW {
+        size: u32,
+        major: u32,
+        minor: u32,
+        build: u32,
+        platform: u32,
+        csd: [u16; 128],
+    }
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn RtlGetVersion(v: *mut OsVersionInfoW) -> i32;
+    }
+    let mut v = OsVersionInfoW {
+        size: std::mem::size_of::<OsVersionInfoW>() as u32,
+        major: 0,
+        minor: 0,
+        build: 0,
+        platform: 0,
+        csd: [0; 128],
+    };
+    if unsafe { RtlGetVersion(&mut v) } != 0 {
+        return "Windows".into();
+    }
+    let name = if v.major == 10 && v.build >= 22000 { "Windows 11" } else { "Windows" };
+    format!("{name} {}.{}.{}", v.major, v.minor, v.build)
+}
+
+/// report.md (pure).
+pub fn render_report(
+    name: &str,
+    started: &str,
+    duration_s: f64,
+    versions: &str,
+    apps: &[String],
+    entries: &[Entry],
+    skill: Option<&str>,
+) -> String {
+    let steps: Vec<&Entry> = entries.iter().filter(|e| !e.note).collect();
+    let notes: Vec<&Entry> = entries.iter().filter(|e| e.note).collect();
+    let failed = steps.iter().filter(|e| !e.ok).count();
+    let mut s = format!(
+        "# Bug report: {name}\n\n- Recorded: {started} ({:.0} s)\n- {versions}\n- Steps: {} ({failed} failed)\n",
+        duration_s,
+        steps.len()
+    );
+    if !apps.is_empty() {
+        s.push_str(&format!("- Apps: {}\n", apps.join("; ")));
+    }
+    s.push_str("\n> Screenshots show what was on screen. Look at them before sharing this report.\n");
+    s.push_str("\n## Steps to reproduce\n\n");
+    if steps.is_empty() {
+        s.push_str("(no actions were recorded)\n");
+    }
+    for (i, e) in steps.iter().enumerate() {
+        s.push_str(&format!(
+            "{}. {} — {} ({:.1} s)\n",
+            i + 1,
+            e.what,
+            match &e.error {
+                None => "ok".to_string(),
+                Some(err) => format!("**FAILED**: {err}"),
+            },
+            e.secs
+        ));
+        if let Some(p) = &e.shot {
+            s.push_str(&format!("\n   ![step {}]({p})\n\n", i + 1));
+        }
+    }
+    s.push_str("\n## Observations\n\n");
+    if notes.is_empty() {
+        s.push_str("(none)\n");
+    }
+    for e in &notes {
+        s.push_str(&format!("- {} ({:.1} s)\n", e.what, e.secs));
+        if let Some(p) = &e.shot {
+            s.push_str(&format!("\n  ![note]({p})\n\n"));
+        }
+    }
+    s.push_str("\n## Replay\n\n");
+    match skill {
+        Some(n) => s.push_str(&format!(
+            "The successful steps are saved as the XtraOS skill `{n}`: `run_skill {{\"name\": \"{n}\"}}` replays them.\n"
+        )),
+        None => s.push_str("No replay skill was saved (no successful steps).\n"),
+    }
+    s
+}
+
+/// Writes report.md for a finished recording; returns its path.
+fn write_report(r: &Recording, skill: Option<&str>) -> Option<String> {
+    let rep = r.report.as_ref()?;
+    let md = render_report(
+        &r.name,
+        &rep.started_local,
+        r.started.elapsed().as_secs_f64(),
+        &format!("XtraOS {} · {}", env!("CARGO_PKG_VERSION"), windows_version()),
+        &rep.apps,
+        &rep.entries,
+        skill,
+    );
+    let path = rep.dir.join("report.md");
+    std::fs::write(&path, md).ok()?;
+    Some(path.display().to_string())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -369,5 +737,50 @@ mod tests {
             json!({"window": {"locate_window": {"process": "no-such-app-xyz.exe", "title": "x"}}});
         assert_eq!(resolve(&l).unwrap_err().code, "WINDOW_NOT_FOUND");
         assert!(prepare("click", &json!({})).is_none(), "not recording");
+    }
+
+    // ADR 0053: bug report lines and Markdown.
+    #[test]
+    fn report_lines_and_markdown() {
+        assert_eq!(
+            describe("click", &json!({"ref": "e1"}), Some(("Button", "Save")), "a.txt - Notepad"),
+            "click Button \"Save\" in \"a.txt - Notepad\""
+        );
+        assert_eq!(
+            describe("type", &json!({"text": "hello world", "submit": true}), Some(("Edit", "Name")), ""),
+            "type 11 chars \"hello world\" + Enter Edit \"Name\""
+        );
+        assert_eq!(describe("press_keys", &json!({"keys": "Ctrl+S"}), None, ""), "press Ctrl+S");
+        assert_eq!(describe("launch_app", &json!({"app": "notepad"}), None, "Untitled"), "launch notepad");
+        assert_eq!(describe("click", &json!({"x": 10, "y": 20}), None, ""), "click at (10, 20)");
+        let long = "x".repeat(100);
+        assert!(describe("type", &json!({"text": long}), None, "").len() < 70, "typed text is clipped");
+
+        let e = |what: &str, ok: bool, note: bool| Entry {
+            what: what.into(),
+            ok,
+            error: (!ok).then(|| "STALE_REF: e9 no longer exists".to_string()),
+            shot: Some("step-01.png".into()),
+            secs: 1.5,
+            note,
+        };
+        let md = render_report(
+            "save-bug",
+            "2026-11-11 10:00",
+            12.0,
+            "XtraOS 0.1.0 · Windows 11 10.0.26200",
+            &["notepad.exe \"a.txt\"".into()],
+            &[e("click Button \"Save\"", true, false), e("click e9", false, false), e("total shows 41, expected 42", true, true)],
+            Some("save-bug"),
+        );
+        assert!(md.starts_with("# Bug report: save-bug"));
+        assert!(md.contains("- Steps: 2 (1 failed)"), "{md}");
+        assert!(md.contains("2. click e9 — **FAILED**: STALE_REF"), "{md}");
+        assert!(md.contains("## Observations\n\n- total shows 41, expected 42"), "{md}");
+        assert!(md.contains("![step 1](step-01.png)"), "{md}");
+        assert!(md.contains("run_skill {\"name\": \"save-bug\"}"), "{md}");
+        assert!(md.contains("Look at them before sharing"), "{md}");
+        let none = render_report("x", "t", 1.0, "v", &[], &[], None);
+        assert!(none.contains("(no actions were recorded)") && none.contains("No replay skill"));
     }
 }

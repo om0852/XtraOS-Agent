@@ -33,6 +33,32 @@ fn main() {
     if args.first().map(String::as_str) == Some("--viewer") {
         std::process::exit(xtraos_core::viewer::run_viewer());
     }
+    // ADR 0073 admin tools: `--team-keygen <dir>`, `--team-sign <policy.json> --key <k> --out <f>`.
+    if matches!(args.first().map(String::as_str), Some("--team-keygen" | "--team-sign")) {
+        xtraos_core::cli::attach_console();
+        let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(std::path::PathBuf::from);
+        let r = if args[0] == "--team-keygen" {
+            match args.get(1) {
+                Some(d) => xtraos_core::team::keygen(std::path::Path::new(d)),
+                None => Err("usage: --team-keygen <folder for the key pair>".into()),
+            }
+        } else {
+            match (args.get(1).map(std::path::PathBuf::from), arg("--key"), arg("--out")) {
+                (Some(p), Some(k), Some(o)) => xtraos_core::team::sign_file(&p, &k, &o),
+                _ => Err("usage: --team-sign <policy.json> --key <private.key> --out <team-policy.json>".into()),
+            }
+        };
+        match r {
+            Ok(m) => {
+                println!("{m}");
+                std::process::exit(0)
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1)
+            }
+        }
+    }
     core_main();
 }
 
@@ -62,6 +88,8 @@ async fn run() -> std::io::Result<()> {
         )
     })?;
     pairing::write_connection_info(&dir, &pipe)?;
+    // P7-M4 (ADR 0063): scheduled routines run inside the core, never via Task Scheduler.
+    xtraos_core::routines::start(log.clone());
 
     eprintln!("[xtraos-core] {} listening on {pipe}", protocol::VERSION);
     eprintln!("[xtraos-core] action log: {}", log.path().display());

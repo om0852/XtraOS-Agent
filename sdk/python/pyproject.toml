@@ -8,7 +8,21 @@ version = "0.1.0"
 description = "Python client for the XtraOS Agent core (Windows): call XtraOS tools from scripts and agents."
 requires-python = ">=3.9"
 dependencies = []
-classifiers = ["Operating System :: Microsoft :: Windows"]
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Om Sachin Salunke" }]
+keywords = ["xtraos", "ai-agent", "mcp", "windows", "ui-automation"]
+classifiers = [
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Topic :: Desktop Environment",
+  "Intended Audience :: Developers",
+]
+
+[project.urls]
+Homepage = "https://github.com/om0852/XtraOS-Agent"
+Source = "https://github.com/om0852/XtraOS-Agent/tree/main/sdk/python"
+Issues = "https://github.com/om0852/XtraOS-Agent/issues"
 
 [tool.setuptools]
 packages = ["xtraos"]

@@ -240,12 +240,80 @@ pub fn recent_actions(dir: &Path, n: usize) -> Vec<String> {
     out
 }
 
+/// "AGENTS NOW" from the core's `status` (pure, unit-tested). P8-M3, ADR 0061.
+pub fn agents_section(status: Result<&serde_json::Value, &str>) -> String {
+    let mut s = String::from("AGENTS NOW (live; pause: tray → Agents)\r\n");
+    let st = match status {
+        Ok(v) => v,
+        Err(e) => {
+            s.push_str(&format!("  ({e})\r\n\r\n"));
+            return s;
+        }
+    };
+    if st["stopped"] == true {
+        s.push_str("  ALL STOPPED by you (kill switch). Resume from the tray icon.\r\n");
+    }
+    let list = st["agents"].as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        s.push_str("  (no agent connected)\r\n");
+    }
+    let (now, ended): (Vec<_>, Vec<_>) = list.iter().partition(|a| a["connected"] == true);
+    for a in now.iter().chain(ended.iter()) {
+        let state = if a["connected"] != true {
+            "ended"
+        } else if a["paused"] == true {
+            "PAUSED"
+        } else {
+            "working"
+        };
+        let last = match (a["last_action"].as_str(), a["idle_s"].as_u64()) {
+            (Some(m), Some(i)) => format!("{m} {i}s ago"),
+            _ => "no actions yet".into(),
+        };
+        let refused = a["refused"].as_u64().unwrap_or(0);
+        // Narrow panel: state, client, last action first; counts and session last.
+        s.push_str(&format!(
+            "  {:<7} {:<18} {last}, {} calls{} [{}]\r\n",
+            state,
+            a["client"].as_str().unwrap_or("?"),
+            a["calls"].as_u64().unwrap_or(0),
+            if refused > 0 { format!(", {refused} refused") } else { String::new() },
+            a["session"].as_str().unwrap_or(""),
+        ));
+    }
+    for l in st["locks"].as_array().into_iter().flatten() {
+        s.push_str(&format!(
+            "  window {} \"{}\" in use by {}\r\n",
+            l["window"].as_str().unwrap_or("?"),
+            l["title"].as_str().unwrap_or(""),
+            l["client"].as_str().unwrap_or("?")
+        ));
+    }
+    if let Some(w) = st["health"]["warnings"].as_array().filter(|w| !w.is_empty()) {
+        let w: Vec<&str> = w.iter().filter_map(|x| x.as_str()).collect();
+        s.push_str(&format!("  ⚠ {}\r\n", w.join("; ")));
+    }
+    s.push_str("\r\n");
+    s
+}
+
+fn live_agents() -> String {
+    let live = crate::cli::viewer_status();
+    agents_section(live.as_ref().map_err(|e| e.as_str()))
+}
+
 /// The whole report shown in the window.
 pub fn report(data_dir: &Path) -> String {
+    live_agents() + &rules_and_log(data_dir)
+}
+
+/// Rules and recent activity (the part below "Agents now").
+fn rules_and_log(data_dir: &Path) -> String {
     let path = data_dir.join("policy.json");
     let exists = path.exists();
     let p = Policy::load(&path);
-    let mut s = String::new();
+    // ADR 0064: routines first — they act on their own, so the user should see them.
+    let mut s = crate::routines::overview(data_dir);
     s.push_str("YOUR RULES\r\n");
     s.push_str(&format!(
         "Policy file: {} {}\r\n",
@@ -388,12 +456,40 @@ unsafe fn save(h: WHWND) {
     set_report(h);
 }
 
-unsafe fn set_report(h: WHWND) {
-    let text = wide(&report(&crate::pairing::data_dir()));
+thread_local! {
+    /// The shown report in two parts: (agents now, rules and log).
+    static SHOWN: std::cell::RefCell<(String, String)> = const { std::cell::RefCell::new((String::new(), String::new())) };
+}
+
+unsafe fn show_text(h: WHWND, agents: String, rest: String) {
+    let text = wide(&format!("{agents}{rest}"));
     if let Ok(edit) = GetDlgItem(Some(h), ID_TEXT) {
+        // Keep the reader's place: a live refresh must not jump to the top.
+        let first = SendMessageW(edit, EM_GETFIRSTVISIBLELINE, None, None).0;
         let _ = SetWindowTextW(edit, PCWSTR(text.as_ptr()));
+        if first > 0 {
+            SendMessageW(edit, EM_LINESCROLL, Some(WPARAM(0)), Some(LPARAM(first)));
+        }
+    }
+    SHOWN.with(|s| *s.borrow_mut() = (agents, rest));
+}
+
+unsafe fn set_report(h: WHWND) {
+    show_text(h, live_agents(), rules_and_log(&crate::pairing::data_dir()));
+}
+
+/// Every 3 s: only "Agents now" is re-read (P8-M3); the text changes only when it changed.
+unsafe fn refresh_agents(h: WHWND) {
+    let agents = live_agents();
+    let (old, rest) = SHOWN.with(|s| s.borrow().clone());
+    if agents != old {
+        show_text(h, agents, rest);
     }
 }
+
+const LIVE_TIMER: usize = 7;
+const EM_GETFIRSTVISIBLELINE: u32 = 0x00CE;
+const EM_LINESCROLL: u32 = 0x00B6;
 
 unsafe fn layout(h: WHWND) {
     let mut r = RECT::default();
@@ -664,6 +760,11 @@ unsafe extern "system" fn proc(h: WHWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             }
             set_report(h);
             layout(h);
+            SetTimer(Some(h), LIVE_TIMER, 3000, None);
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == LIVE_TIMER => {
+            refresh_agents(h);
             LRESULT(0)
         }
         WM_SIZE => {
@@ -775,7 +876,7 @@ mod tests {
             "{\"ts_ms\":2000,\"method\":\"click\",\"ok\":false,\"code\":\"BLOCKED_BY_POLICY\",\"ms\":1.0,\"policy\":\"blocked\",\"client\":\"claude\"}\n",
         )
         .unwrap();
-        let r = report(&d);
+        let r = rules_and_log(&d);
         assert!(r.contains("delete               refused"), "{r}");
         assert!(r.contains("notepad.exe"), "{r}");
         assert!(r.contains("message_send         ask you first"), "{r}");
@@ -784,7 +885,7 @@ mod tests {
         assert!(click < old, "newest first");
         assert!(r.contains("BLOCKED_BY_POLICY  [blocked]  (claude)"), "{r}");
         assert_eq!(recent_actions(&logs, 1).len(), 1);
-        let empty = report(&d.join("nope"));
+        let empty = rules_and_log(&d.join("nope"));
         assert!(empty.contains("not created yet") && empty.contains("nothing logged yet"));
         let _ = std::fs::remove_dir_all(d);
     }
@@ -846,5 +947,41 @@ mod tests {
         );
         let round = apps_to_text(&Policy::from_json(&t));
         assert!(round.contains("slack.exe = deny"), "{round}");
+    }
+}
+
+#[cfg(test)]
+mod agents_tests {
+    use super::agents_section;
+    use serde_json::json;
+
+    #[test]
+    fn agents_now_lists_working_paused_and_ended() {
+        let st = json!({
+            "stopped": false,
+            "agents": [
+                {"session": "s2", "client": "mcp:codex", "connected": false, "paused": false,
+                 "last_action": "observe", "idle_s": 90, "calls": 3, "refused": 0},
+                {"session": "s1", "client": "mcp:claude-code", "connected": true, "paused": false,
+                 "last_action": "click", "idle_s": 4, "calls": 12, "refused": 2},
+                {"session": "s3", "client": "mcp:hermes", "connected": true, "paused": true,
+                 "last_action": null, "idle_s": null, "calls": 0, "refused": 0}
+            ],
+            "locks": [{"window": "w1", "title": "Notepad", "client": "mcp:claude-code"}],
+            "health": {"warnings": ["RAM 93 %"]}
+        });
+        let s = agents_section(Ok(&st));
+        let lines: Vec<&str> = s.lines().collect();
+        assert!(lines[1].starts_with("  working mcp:claude-code"), "{s}");
+        assert!(lines[1].contains("click 4s ago, 12 calls, 2 refused [s1]"), "{s}");
+        assert!(lines[2].starts_with("  PAUSED  mcp:hermes") && lines[2].contains("no actions yet"), "{s}");
+        assert!(lines[3].starts_with("  ended   mcp:codex"), "connected first, ended last: {s}");
+        assert!(s.contains("window w1 \"Notepad\" in use by mcp:claude-code"), "{s}");
+        assert!(s.contains("RAM 93 %"), "{s}");
+
+        let off = agents_section(Err("the XtraOS core is not running"));
+        assert!(off.contains("(the XtraOS core is not running)"));
+        let stopped = agents_section(Ok(&json!({"stopped": true, "agents": []})));
+        assert!(stopped.contains("ALL STOPPED") && stopped.contains("no agent connected"));
     }
 }

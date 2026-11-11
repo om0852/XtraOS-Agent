@@ -2,7 +2,8 @@
 #   -CertThumbprint <sha1>  sign bin\xtraos-core.exe with that certificate (Windows SDK signtool)
 # Everything is free and local: release build of the core, the MCP server with production
 # dependencies, and the official signed Node 24 runtime copied from this machine.
-param([string]$CertThumbprint = '', [string]$Version = '0.1.0')
+#   -PfxPath <file.pfx>     or sign with a .pfx (password in XTRAOS_SIGN_PFX_PASSWORD) (ADR 0071)
+param([string]$CertThumbprint = '', [string]$PfxPath = '', [string]$Version = '0.1.1')
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
@@ -18,7 +19,9 @@ cmd /c "cargo build --release 2>&1" | Select-Object -Last 2
 if ($LASTEXITCODE) { throw 'cargo build --release failed' }
 Pop-Location
 
-if (Test-Path $out) { Remove-Item -Recurse -Force $out }
+# Clear the old bundle's contents rather than the folder itself: a process that has the folder as
+# its working directory (or OneDrive syncing it) keeps the folder, but never its files.
+if (Test-Path $out) { Get-ChildItem -Force $out | Remove-Item -Recurse -Force }
 New-Item -ItemType Directory -Force (Join-Path $out 'bin'), (Join-Path $out 'node'), (Join-Path $out 'mcp') | Out-Null
 Copy-Item (Join-Path $root 'core\target\release\xtraos-core.exe') (Join-Path $out 'bin')
 
@@ -45,6 +48,8 @@ Step 'launcher, scripts, docs'
 # The MCP launcher every client config points at.
 "@echo off`r`n`"%~dp0node\node.exe`" `"%~dp0mcp\xtraos-mcp.mjs`" %*`r`n" |
   Set-Content -Encoding ascii -NoNewline (Join-Path $out 'xtraos-mcp.cmd')
+# `xtraos setup` / `xtraos doctor` (ADR 0045): the same launcher under a shorter name.
+Copy-Item (Join-Path $out 'xtraos-mcp.cmd') (Join-Path $out 'xtraos.cmd')
 foreach ($f in 'install.ps1', 'uninstall.ps1', 'INSTALL.md') { Copy-Item (Join-Path $PSScriptRoot $f) $out }
 "$Version" | Set-Content -Encoding ascii -NoNewline (Join-Path $out 'VERSION')
 
@@ -71,12 +76,11 @@ foreach ($k in ($pkgs.Keys | Sort-Object)) {
 }
 $tp | Set-Content -Encoding utf8 (Join-Path $out 'THIRD-PARTY.md')
 
-if ($CertThumbprint) {
-  Step "signing with certificate $CertThumbprint"
-  $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
-  if (-not $signtool) { throw 'signtool.exe (Windows SDK) not found' }
-  & $signtool.FullName sign /sha1 $CertThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 (Join-Path $out 'bin\xtraos-core.exe')
-  if ($LASTEXITCODE) { throw 'signing failed' }
+if ($CertThumbprint -or $PfxPath) {
+  Step 'signing XtraOS executables (ADR 0071)'
+  $sign = @{ Files = @(Join-Path $out 'bin\xtraos-core.exe') }
+  if ($CertThumbprint) { $sign.CertThumbprint = $CertThumbprint } else { $sign.PfxPath = $PfxPath }
+  & (Join-Path $PSScriptRoot 'sign.ps1') @sign
 } else {
   Write-Host '    (not signed: developer preview — runs where Smart App Control is off; ADR 0019)'
 }

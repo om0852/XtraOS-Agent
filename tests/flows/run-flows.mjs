@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..', '..');
-const bundle = path.join(root, 'dist', 'xtraos-0.1.0-win-x64');
+const bundle = path.join(root, 'dist', 'xtraos-0.1.1-win-x64');
 const launcher = path.join(bundle, 'xtraos-mcp.cmd');
 if (!fs.existsSync(launcher)) throw new Error('build the bundle first: release/build-release.ps1');
 const outDir = path.join(root, 'docs', 'flows');

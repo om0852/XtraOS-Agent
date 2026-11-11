@@ -542,7 +542,8 @@ async fn rr01_04_record_and_replay() {
     )
     .await;
     let e = core.ok("record_session", json!({"op": "stop"})).await;
-    assert!(text(&e).contains("nothing saved"), "{e}");
+    // Wording since ADR 0053 (a bug report may still be written): "no skill saved".
+    assert!(text(&e).contains("no skill saved"), "{e}");
     assert!(!home.join("skills").join("empty-one.json").exists());
     eprintln!("RR-04 ok: name rules, one at a time, empty recordings not saved");
     core.stop().await;

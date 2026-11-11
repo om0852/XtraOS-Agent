@@ -35,6 +35,8 @@ pub struct Core {
         std::process::Child,
         std::io::BufReader<std::process::ChildStdout>,
     )>,
+    pipe: String,
+    token: String,
 }
 
 impl Core {
@@ -60,6 +62,8 @@ impl Core {
             id: 0,
             dir,
             process: None,
+            pipe: pipe.clone(),
+            token: token.clone(),
         };
         let r = core
             .call("pair", json!({"token": token, "client": "test"}))
@@ -94,11 +98,20 @@ impl Core {
     /// tests that need the real binary: the admin helper only serves a core whose image is
     /// its own exe, so an in-process core (this test binary) can never pass F5.
     pub async fn start_process(exe: &std::path::Path) -> Self {
+        Self::start_process_with(exe, None).await
+    }
+
+    /// Like `start_process`, with a `policy.json` written into the core's private home first.
+    pub async fn start_process_with(exe: &std::path::Path, policy: Option<&Value>) -> Self {
         use std::io::BufRead;
         input::init_dpi();
         let pipe = format!(r"\\.\pipe\xtraos-t-{}", rand_hex(6));
         let token = rand_hex(32);
         let dir = std::env::temp_dir().join(format!("xtraos-t-{}", rand_hex(4)));
+        if let Some(p) = policy {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("policy.json"), p.to_string()).unwrap();
+        }
         let mut child = std::process::Command::new(exe)
             .env("XTRAOS_PIPE", &pipe)
             .env("XTRAOS_TOKEN", &token)
@@ -124,12 +137,37 @@ impl Core {
             id: 0,
             dir,
             process: Some((child, out)),
+            pipe: pipe.clone(),
+            token: token.clone(),
         };
         let r = core
             .call("pair", json!({"token": token, "client": "test"}))
             .await;
         assert!(r.get("result").is_some(), "{r}");
         core
+    }
+
+    /// Another paired client on the same core (a second agent, its own session). It owns no
+    /// server, process or folder: dropping it just closes its connection.
+    pub async fn another(&self, client: &str) -> Core {
+        let p = ClientOptions::new().open(&self.pipe).unwrap();
+        let (rd, wr) = tokio::io::split(p);
+        let mut c = Core {
+            server: None,
+            log: self.log.clone(),
+            rd: BufReader::new(rd),
+            wr,
+            id: 0,
+            dir: std::env::temp_dir().join(format!("xtraos-t-none-{}", rand_hex(4))),
+            process: None,
+            pipe: self.pipe.clone(),
+            token: self.token.clone(),
+        };
+        let r = c
+            .call("pair", json!({"token": self.token, "client": client}))
+            .await;
+        assert!(r.get("result").is_some(), "{r}");
+        c
     }
 
     pub async fn stop(mut self) {

@@ -25,8 +25,15 @@ New-Item -ItemType Directory -Force $Prefix | Out-Null
 foreach ($item in 'bin', 'mcp', 'node', 'xtraos-mcp.cmd', 'xtraos.cmd', 'uninstall.ps1', 'INSTALL.md', 'THIRD-PARTY.md', 'VERSION') {
   $from = Join-Path $src $item
   $to = Join-Path $Prefix $item
-  if (Test-Path $to) { Remove-Item -Recurse -Force $to }
-  Copy-Item -Recurse $from $to
+  if (Test-Path $to -PathType Container) {
+    # Empty the folder rather than delete it: a process whose working folder is this one
+    # (e.g. a core still exiting) keeps the folder itself locked, but not its files.
+    Get-ChildItem -LiteralPath $to -Force | Remove-Item -Recurse -Force
+    Copy-Item -Recurse (Join-Path $from '*') $to
+  } else {
+    if (Test-Path $to) { Remove-Item -Force $to }
+    Copy-Item -Recurse $from $to
+  }
 }
 $mcp = Join-Path $Prefix 'xtraos-mcp.cmd'
 $core = Join-Path $Prefix 'bin\xtraos-core.exe'

@@ -814,6 +814,14 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
             rate = rate.min(t.rate_per_minute.unwrap_or(u32::MAX));
             max_task = max_task.min(t.max_actions_per_task.unwrap_or(u32::MAX));
         }
+        // ADR 0074: a skill that promises to ask the user always does (a deny still wins).
+        // A routine was approved by the user in its own dialog when it was added; its runs
+        // are unattended and do not ask again.
+        let routine = crate::locks::current_client().is_some_and(|c| c.starts_with("routine:"));
+        if skill.as_ref().is_some_and(|pl| pl.asks) && d == Decision::Allow && !routine {
+            d = Decision::Confirm;
+            why = "this skill changes your files or documents and always asks first".into();
+        }
         (d, why, what, rate, (max_task, s.policy.task_idle_minutes))
     });
     {

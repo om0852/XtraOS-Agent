@@ -593,7 +593,22 @@ pub struct Plan {
     pub class: Class,
     pub what: String,
     pub is_macro: bool,
+    /// The skill promises to ask the user (its description says so): safety turns an "allow"
+    /// into the approval dialog; a deny rule still wins (ADR 0074).
+    pub asks: bool,
 }
+
+/// Built-in skills that change the user's documents or files in bulk and say "asks the user".
+/// files.organize / files.bulk_rename only when `apply` is set (a preview changes nothing).
+pub const ASKING_SKILLS: [&str; 7] = [
+    "office.excel_write",
+    "office.word_append",
+    "office.ppt_add_slide",
+    "office.export_pdf",
+    "files.organize",
+    "files.bulk_rename",
+    "skill.export",
+];
 
 pub fn plan(p: &Value) -> Result<Plan, ActError> {
     let name = str_arg(p, "name")?.to_string();
@@ -795,11 +810,13 @@ pub fn plan(p: &Value) -> Result<Plan, ActError> {
         } else {
             b.class
         };
+        let asks = ASKING_SKILLS.contains(&b.name) && class != Class::Observe;
         return Ok(Plan {
             name,
             class,
             what,
             is_macro: false,
+            asks,
         });
     }
     if macros().iter().any(|(n, _)| *n == name) {
@@ -808,6 +825,7 @@ pub fn plan(p: &Value) -> Result<Plan, ActError> {
             name,
             class: Class::Observe,
             is_macro: true,
+            asks: false,
         });
     }
     Err(bad(format!("unknown skill '{name}' (see list_skills)")))
@@ -2492,8 +2510,10 @@ mod tests {
         // and the approval text is the plan.
         let pl = |apply: bool| plan(&json!({"name": "files.organize", "args": {"path": dir.display().to_string(), "apply": apply}})).unwrap();
         assert_eq!(pl(false).class, Class::Observe);
+        assert!(!pl(false).asks, "a preview does not ask");
         let ask = pl(true);
         assert_eq!(ask.class, Class::FileChange);
+        assert!(ask.asks, "apply always shows the approval dialog (ADR 0074)");
         assert!(ask.what.contains("move 4 file(s)") && ask.what.contains("Images"), "{}", ask.what);
         let done = files_organize(&p(json!({"apply": true}))).unwrap();
         assert_eq!(done["moved"], 4, "{done}");
@@ -2758,5 +2778,25 @@ mod short_path_tests {
         }
         assert_eq!(long_path(std::path::Path::new(r"C:\plain\path")), std::path::PathBuf::from(r"C:\plain\path"));
         let _ = std::fs::remove_dir_all(&long);
+    }
+
+    /// ADR 0074: a skill whose description promises to ask the user must really ask: either its
+    /// class asks by default, or it is in ASKING_SKILLS (safety turns "allow" into the dialog).
+    #[test]
+    fn skills_that_say_they_ask_do_ask() {
+        let defaults = crate::policy::Policy::default();
+        for b in crate::skills::BUILTINS {
+            if !b.about.contains("asks the user") && !b.about.contains("approves it in a dialog") {
+                continue;
+            }
+            let class_asks = defaults.classes[&b.class] != crate::policy::Decision::Allow;
+            let own_dialog = b.name == "routine.add"; // routines.rs shows its own approval dialog
+            assert!(
+                class_asks || own_dialog || crate::skills::ASKING_SKILLS.contains(&b.name),
+                "{} says it asks the user but its class '{}' is allowed by default",
+                b.name,
+                b.class.name()
+            );
+        }
     }
 }

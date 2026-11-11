@@ -1455,7 +1455,7 @@ fn type_text(p: &Value) -> Result<Value, ActError> {
             return Err(bad("'ref' belongs to another window than 'window'"))
         }
         (Some(t), _) => t.window,
-        (None, Some(w)) => w,
+        (None, Some(w)) => key_window(w),
         (None, None) => return Err(bad("'window' or 'ref' is required")),
     };
     let text = p
@@ -1532,12 +1532,25 @@ fn type_text(p: &Value) -> Result<Value, ActError> {
             w.wait(1000);
         }
     }
+    // ADR 0075: a Chromium/Electron window takes keys in its renderer process, which the idle
+    // and value checks cannot see (Antigravity reported only 17 of 182 characters through UI
+    // Automation). Giving the window back too early sends the rest to the user's window, so a
+    // borrowed window keeps the foreground a little longer.
+    if borrow.is_some() && crate::winmgr::is_chromium(window) {
+        sleep(Duration::from_millis(chromium_drain_ms(chars.len())));
+    }
     // Never echo the text back (it may be sensitive); report only the count.
     let mut out = json!({"typed_chars": chars.len(), "submitted": submit, "settled": settled, "mode": "input"});
     if let Some(b) = borrow {
         out["borrowed_ms"] = json!(b.finish());
     }
     Ok(out)
+}
+
+/// How long a borrowed Chromium window keeps the foreground after typing (ADR 0075):
+/// 300 ms + 6 ms per character, at most 2.5 s.
+pub fn chromium_drain_ms(chars: usize) -> u64 {
+    (300 + 6 * chars as u64).min(2_500)
 }
 
 /// Polls the focused field's value length until it is unchanged twice in a row (40 ms apart,
@@ -1562,8 +1575,17 @@ fn settle_focused_value() -> Option<bool> {
     Some(false)
 }
 
+/// ADR 0075: while a modal dialog blocks `window`, keys go to the dialog (the window behind it
+/// does not take them, or takes them in a half state, e.g. Excel's Point mode).
+fn key_window(window: HWND) -> HWND {
+    match crate::winmgr::owned_dialog(window) {
+        Some((d, true)) => d,
+        _ => window,
+    }
+}
+
 fn press_keys(p: &Value) -> Result<Value, ActError> {
-    let window = window_arg(p, "window", true)?.expect("required");
+    let window = key_window(window_arg(p, "window", true)?.expect("required"));
     // P6-M3 (ADR 0046): one chord may be given as a plain string ("Ctrl+S").
     let single;
     let list = match p.get("keys") {
@@ -1748,6 +1770,13 @@ fn open_clipboard() -> Result<(), ActError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chromium_drain_grows_with_text_and_is_capped() {
+        assert_eq!(chromium_drain_ms(0), 300);
+        assert_eq!(chromium_drain_ms(182), 1_392, "the Antigravity prompt");
+        assert_eq!(chromium_drain_ms(10_000), 2_500);
+    }
 
     #[test]
     fn input_struct_layout_matches_win32() {

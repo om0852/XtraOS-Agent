@@ -96,6 +96,8 @@ struct Ui {
 }
 
 struct Prompt {
+    /// Random id a paired device answers by (ADR 0076).
+    uid: String,
     title: String,
     message: String,
     buttons: Vec<String>,
@@ -758,7 +760,7 @@ pub fn authorize(method: &str, p: &Value) -> Result<Approval, ActError> {
             )));
         }
     }
-    if HITL_METHODS.contains(&method) {
+    if HITL_METHODS.contains(&method) || is_approval_method(method) {
         return Ok(Approval {
             decision: "allow",
             policy_note: None,
@@ -953,6 +955,9 @@ fn open_prompt(
         .insert(
             id,
             Prompt {
+                uid: crate::winsec::random_bytes(16)
+                    .map(|b| b.iter().map(|x| format!("{x:02x}")).collect())
+                    .unwrap_or_else(|_| format!("p{id}")),
                 title: title.into(),
                 message: message.into(),
                 buttons,
@@ -1023,6 +1028,60 @@ fn forget_prompt(id: u64) {
     }
 }
 
+/// An open dialog as a paired device sees it (ADR 0076).
+#[derive(Clone, Debug)]
+pub struct OpenPrompt {
+    pub uid: String,
+    pub title: String,
+    pub message: String,
+    pub buttons: Vec<String>,
+    pub cancel: usize,
+    pub age_ms: u64,
+}
+
+/// The dialogs waiting for an answer, oldest first.
+pub fn open_prompts() -> Vec<OpenPrompt> {
+    let g = PROMPTS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut v: Vec<(u64, OpenPrompt)> = g
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .filter(|(_, p)| p.open && p.result.is_none())
+                .map(|(id, p)| {
+                    (
+                        *id,
+                        OpenPrompt {
+                            uid: p.uid.clone(),
+                            title: p.title.clone(),
+                            message: p.message.clone(),
+                            buttons: p.buttons.clone(),
+                            cancel: p.cancel,
+                            age_ms: p.opened.elapsed().as_millis() as u64,
+                        },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort_by_key(|(id, _)| *id);
+    v.into_iter().map(|(_, p)| p).collect()
+}
+
+/// Answers an open dialog by its uid (a checked answer from a paired device) and closes its
+/// window. False when it is not open any more.
+pub fn answer_uid(uid: &str, button: usize) -> bool {
+    let found = {
+        let g = PROMPTS.lock().unwrap_or_else(|e| e.into_inner());
+        g.as_ref()
+            .and_then(|m| m.iter().find(|(_, p)| p.uid == uid && p.open && p.result.is_none()))
+            .map(|(id, p)| (*id, p.hwnd))
+    };
+    let Some((id, hwnd)) = found else { return false };
+    answer(id, button);
+    post_close_prompt(hwnd);
+    true
+}
+
 /// Open dialog windows (for tests acting as the human).
 pub fn prompt_windows() -> Vec<usize> {
     PROMPTS
@@ -1039,6 +1098,11 @@ pub fn prompt_windows() -> Vec<usize> {
 }
 
 pub const METHODS: &[&str] = &["ask_human", "wait_for_human"];
+
+/// Answering dialogs from a paired device (ADR 0076): not under the policy, like ask_human.
+fn is_approval_method(m: &str) -> bool {
+    crate::approvals::METHODS.contains(&m)
+}
 
 pub fn run(method: &str, p: &Value) -> Result<Value, ActError> {
     match method {

@@ -33,6 +33,7 @@ pub mod recorder;
 pub mod routines;
 pub mod safety;
 pub mod sandbox;
+pub mod approvals;
 pub mod sharing;
 pub mod skills;
 pub mod sysaudio;

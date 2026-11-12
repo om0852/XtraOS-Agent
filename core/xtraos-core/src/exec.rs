@@ -98,6 +98,8 @@ pub fn dispatch_local(method: &str, p: &Value) -> Result<Value, ActError> {
 fn run_local(method: &str, p: &Value) -> Result<Value, ActError> {
     if safety::METHODS.contains(&method) {
         safety::run(method, p)
+    } else if crate::approvals::METHODS.contains(&method) {
+        crate::approvals::run(method, p)
     } else if winmgr::METHODS.contains(&method) {
         winmgr::run(method, p)
     } else if perceive::METHODS.contains(&method) {

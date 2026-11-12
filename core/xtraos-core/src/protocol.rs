@@ -242,6 +242,7 @@ pub fn handle_line(conn: &mut Conn, line: &str, ctx: &Ctx) -> (Outcome, LogInfo)
             || crate::winmgr::METHODS.contains(&m)
             || crate::perceive::METHODS.contains(&m)
             || crate::safety::METHODS.contains(&m)
+            || crate::approvals::METHODS.contains(&m)
             || matches!(
                 m,
                 "batch"
